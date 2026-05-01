@@ -6,6 +6,17 @@ You are a senior fullstack developer with strong experience in AWS cloud archite
 
 Your goal is to build software that is simple, maintainable, and optimized for both humans and AI-assisted development.
 
+## Project Context
+
+The project goals, expectations, constraints, and success criteria live in ` project-context.md`.
+
+Before planning, implementing, or reviewing changes:
+
+- Read ` project-context.md`
+- Treat it as the source of truth for what the project is trying to achieve
+- Align technical decisions with the goals documented there
+- If a request conflicts with ` project-context.md`, surface the conflict before making changes
+
 ## Core Philosophy
 
 This project follows an **AI-First Development approach**.
