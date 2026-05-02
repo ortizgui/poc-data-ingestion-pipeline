@@ -29,7 +29,9 @@ Mandatory unless user explicitly says otherwise.
 
 ## Target Flow
 
-`EventBridge -> Step Functions -> Glue Jobs -> DynamoDB -> S3 analytics -> Glue Data Catalog -> Athena -> QuickSight`
+`EventBridge -> Step Functions(InitExecution -> ValidateEvent -> Landing -> Harmonization -> Enrichment -> S3Notification -> FinalizeExecution) -> DynamoDB -> S3 analytics -> Glue Data Catalog -> Athena -> QuickSight`
+
+Downstream: `S3 ObjectCreated(curated/rejected) -> SQS curated-files -> ECS PublishEvents -> SNS -> SQS destino`
 
 ## Main Components
 
@@ -65,12 +67,20 @@ Mandatory unless user explicitly says otherwise.
 - not source for analytics dashboards;
 - not place for millions of rejected rows.
 
-### Business S3 Data Lake
+### S3 Business Data Lake
 
 - `raw`: source copy;
 - `processed`: harmonized domain file;
 - `curated`: enriched final file;
 - `rejected`: detailed rejected rows and file-failed payloads.
+
+### Downstream (SQS + ECS + SNS)
+
+- S3 notification fires on `curated/*.parquet` and `rejected/*.jsonl`;
+- both go to same SQS `curated-files`;
+- ECS worker reads SQS, fetches product config from DynamoDB, reads S3 rows;
+- publishes `domain_record_ready` to product publish destinations;
+- publishes `ingestion.records-rejected` and `ingestion.file-failed` to rejection policy destinations.
 
 ### Analytics S3
 
@@ -88,19 +98,37 @@ Purpose:
 
 ### Glue Data Catalog
 
-- register analytics database and tables;
-- expose schema + partitions;
-- point Athena to analytics S3 prefixes.
+Databases:
+
+- `poc_data_ingestion_analytics`: 8 operational analytics tables.
+- `poc_data_ingestion_business`: 4 business data lake tables (raw, processed, curated, rejected).
+
+Registration:
+
+- `glue_catalog.py` registers all tables during bootstrap.
+- analytics tables use partition `anomesdia`; business tables use `year/month/day`.
+- S3 prefix points: analytics bucket for observability, data-lake bucket for business.
 
 ### Athena
 
 - query partitioned analytics tables;
-- build views for dashboard consumption.
+- views defined in `athena_views.sql`:
+  - `vw_ingestion_status_by_day`
+  - `vw_ingestion_errors_by_product`
+  - `vw_ingestion_duration_by_step`
+  - `vw_rejections_by_reason`
+  - `vw_data_quality_by_product`
+  - `vw_schema_validation_by_product`
+  - `vw_file_lineage_timeline`
+  - `vw_execution_timeline`
+  - `vw_curated_with_run_context` (join business curated + analytics runs)
+  - `vw_rejected_with_context` (join business rejected + analytics runs)
+- views join across both databases for business + operational context.
 
 ### QuickSight
 
 - consume Athena datasets;
-- build operational dashboards.
+- build operational dashboards from views.
 
 ## Text Diagram
 
@@ -113,11 +141,16 @@ Product/File Ready Event
         -> set execution_id
         -> set correlation_id
         -> set anomesdia
+        -> write analytics execution_events (ingestion_started)
+     -> ValidateEvent
+        -> read DynamoDB ProductConfig
+        -> validate product exists + config valid
      -> Landing Glue Job
-        -> read source
+        -> read source from product-lake S3
         -> write /raw
         -> write analytics step/lineage/event
      -> Harmonization Glue Job
+        -> read de-para mapping from s3://data-lake/de-para/
         -> read /raw
         -> write /processed
         -> write rejected detail when needed
@@ -127,10 +160,19 @@ Product/File Ready Event
         -> write /curated
         -> write rejected detail when needed
         -> write analytics step/error/rejection/quality/lineage/event
+     -> CuratedS3Notification
+        -> verify S3 notification config
      -> FinalizeExecution
         -> consolidate run status
         -> write analytics_ingestion_runs
-        -> update operational status
+        -> write manifest to S3
+        -> on failure: also write analytics error + run FAILED
+  -> (downstream) S3 ObjectCreated curated/*.parquet + rejected/*.jsonl
+     -> SQS curated-files
+     -> ECS PublishEvents worker
+        -> read DynamoDB product destinations
+        -> publish domain_record_ready / records-rejected / file-failed
+        -> SNS -> SQS destino
   -> Glue Data Catalog
   -> Athena
   -> QuickSight
@@ -490,17 +532,25 @@ Extra partitions like `product`, `domain`, `status` only when query volume justi
 
 ## Athena + QuickSight
 
-Glue Data Catalog must expose analytics tables.
+Athena queries across both Glue databases:
 
-Athena should query tables and views like:
+- `poc_data_ingestion_analytics` for operational observability.
+- `poc_data_ingestion_business` for curated enriched data + rejected detail.
+
+Views already defined in `athena_views.sql`:
 
 - `vw_ingestion_status_by_day`
 - `vw_ingestion_errors_by_product`
 - `vw_ingestion_duration_by_step`
 - `vw_rejections_by_reason`
 - `vw_data_quality_by_product`
+- `vw_schema_validation_by_product`
+- `vw_file_lineage_timeline`
+- `vw_execution_timeline`
+- `vw_curated_with_run_context`
+- `vw_rejected_with_context`
 
-QuickSight should use Athena datasets for operational dashboards.
+QuickSight uses Athena datasets from these views for operational dashboards.
 
 ## Decisions
 
@@ -546,22 +596,27 @@ QuickSight should use Athena datasets for operational dashboards.
 - `pipeline.py`: bootstrap + event publish.
 - `state-machine.asl.json`: local flow.
 - `local_sfn_runner.py`: local orchestration.
+- `local_eventbridge_runner.py`: consumes EventBridge target queue, starts SFN.
 - `glue_landing.py`: landing step.
 - `glue_harmonization.py`: harmonization step.
 - `enrichment_batch.py`: enrichment step.
 - `analytics_writer.py`: shared analytics emit rules.
 - `glue_catalog.py`: Glue Data Catalog DDL bootstrap (analytics + business databases/tables).
-- `athena_views.sql`: Athena operational views for QuickSight dashboards.
+- `athena_views.sql`: 10 Athena operational views for QuickSight dashboards.
+- `ecs_worker.py`: consumes SQS curated-files, reads S3, publishes SNS.
 - `evidence.py`: local evidence output.
+- `e2e_test.py`: end-to-end test against MiniStack.
 
 ## Success
 
 Success means:
 
-- business flow still works;
-- each ingestion writes analytics facts;
+- business flow still works (curated + rejected downstream);
+- each ingestion writes analytics facts to all 8 datasets;
 - failures also appear in analytics;
-- Athena can query by `anomesdia`;
+- Glue Data Catalog tables registered for analytics + business lake;
+- Athena can query by `anomesdia` across both databases;
+- 10 operational views join analytics + business data;
 - QuickSight can build operational dashboards;
 - new products need low customization.
 
