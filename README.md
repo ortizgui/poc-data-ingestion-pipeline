@@ -37,13 +37,16 @@ flowchart LR
     Processed --> Enrichment[Step: EnrichmentBatch<br/>Batch/ECS task]
     Enrichment --> Curated[S3 data-lake/curated]
     Harmonization --> Rejected[S3 data-lake/rejected]
+    Enrichment --> Rejected
+    SFN --> FileFailed[ingestion.file-failed<br/>threshold/contract failure]
 
     Curated --> S3Notification[S3 ObjectCreated<br/>curated/*.parquet]
     Rejected --> RejectedNotification[S3 ObjectCreated<br/>rejected/*.jsonl]
     S3Notification --> CuratedQueue[SQS<br/>curated-files]
     RejectedNotification --> CuratedQueue
+    FileFailed --> CuratedQueue
     CuratedQueue --> Publish[Step: PublishEvents<br/>ECS Worker]
-    Publish --> SNS[SNS<br/>domain events]
+    Publish --> SNS[SNS<br/>domain/data-quality events]
     SNS --> DestQueues[SQS destino]
 ```
 
@@ -60,6 +63,7 @@ sequenceDiagram
     participant Raw as S3 data-lake/raw
     participant Processed as S3 data-lake/processed
     participant Curated as S3 data-lake/curated
+    participant Rejected as S3 data-lake/rejected
     participant CQ as SQS curated-files
     participant ECS as ECS PublishEvents worker
     participant SNS as SNS
@@ -71,13 +75,32 @@ sequenceDiagram
     SFN->>ProductLake: Step LandingGlue le arquivo origem
     SFN->>Raw: Step LandingGlue grava arquivo raw
     SFN->>DDB: Step HarmonizationGlue identifica mapping do produto
-    SFN->>Processed: Step HarmonizationGlue grava dominio transaction
-    SFN->>Curated: Step EnrichmentBatch grava arquivo curated
-    Curated-->>CQ: S3 ObjectCreated curated/*.parquet
+    alt contrato quebrado ou threshold excedido na harmonizacao
+        SFN->>Rejected: grava rejected/file-failed ou rejected/harmonization
+        SFN->>CQ: publica ingestion.file-failed
+    else harmonizacao dentro do threshold
+        SFN->>Processed: Step HarmonizationGlue grava dominio transaction
+        opt linhas invalidas na harmonizacao
+            SFN->>Rejected: grava rejected/harmonization/*.jsonl
+            Rejected-->>CQ: S3 ObjectCreated rejected/*.jsonl
+        end
+        alt threshold excedido no enriquecimento
+            SFN->>Rejected: grava rejected/enrichment/*.jsonl
+            SFN->>CQ: publica ingestion.file-failed
+        else enriquecimento dentro do threshold
+            opt linhas invalidas no enriquecimento
+                SFN->>Rejected: grava rejected/enrichment/*.jsonl
+                Rejected-->>CQ: S3 ObjectCreated rejected/*.jsonl
+            end
+            SFN->>Curated: Step EnrichmentBatch grava arquivo curated
+            Curated-->>CQ: S3 ObjectCreated curated/*.parquet
+        end
+    end
     ECS->>CQ: receive S3 notification
-    ECS->>Curated: Step PublishEvents le arquivo curated
+    ECS->>Curated: Step PublishEvents le arquivo curated quando domain_record_ready
+    ECS->>Rejected: Step PublishEvents le arquivo rejected quando ingestion.records-rejected
     ECS->>DDB: Step PublishEvents busca destinos do produto
-    ECS->>SNS: publica domain_record_ready
+    ECS->>SNS: publica domain_record_ready, ingestion.records-rejected ou ingestion.file-failed
 ```
 
 ## Arquitetura local
@@ -93,9 +116,11 @@ sequenceDiagram
 - `config/mappings/*.json`: de-para por produto para o dominio comum `transaction`.
 - `samples/`: 3 arquivos e 3 eventos. `orders` e `payments` processam para o mesmo dominio `transaction`; `invoices` pula porque nao existe no DynamoDB.
 
-O fluxo preserva a arquitetura alvo:
+O fluxo preserva a arquitetura alvo, com `rejected` como caminho lateral de qualidade:
 
 `EventBus -> Step Functions -> Glue landing -> /raw -> Glue harmonizacao -> /processed -> batch enrichment -> /curated -> S3 notification -> SQS -> ECS -> SNS`
+
+`/rejected -> S3 notification -> SQS -> ECS -> SNS data-quality`
 
 Na POC local, MiniStack emula os servicos AWS possiveis. Glue/ECS sao scripts Python locais. EventBridge entrega em uma fila target local e `local_eventbridge_runner.py` aciona o runner da Step Functions. A sequencia de steps vem do `state-machine.asl.json`; `pipeline.py` nao chama jobs diretamente.
 
@@ -201,7 +226,7 @@ Resultado esperado do E2E:
 - S3 notification: `data-lake` prefix `curated/` suffix `.parquet` -> SQS `curated-files`.
 - S3 notification: `data-lake` prefix `rejected/` suffix `.jsonl` -> SQS `curated-files`.
 - SQS: `curated-files`, filas destino criadas pelo worker.
-- SNS: topicos destino criados pelo worker.
+- SNS: topicos destino criados pelo worker, incluindo destinos de dominio e qualidade.
 
 ## Mapeamento por Produto
 
@@ -250,6 +275,12 @@ Outro produto pode ter colunas origem diferentes, mas precisa mapear para o mesm
 Campos obrigatorios vazios na harmonizacao ou falhas por linha no enriquecimento nao bloqueiam o arquivo inteiro enquanto ficarem dentro do `rejection_policy` do produto. Linhas boas seguem para `processed` e `curated`; linhas ruins sao gravadas em `rejected/<stage>/<product>/.../<run_id>/*.jsonl`.
 
 Se rejeicoes em qualquer etapa passarem de `max_error_percent` ou `max_error_count`, a execucao falha e nao grava a pasta da proxima etapa (`processed` na harmonizacao, `curated` no enriquecimento). A falha publica evento `ingestion.file-failed`. Arquivos `rejected/*.jsonl` geram notificacao S3 para a mesma SQS do worker; o ECS publica `ingestion.records-rejected` no SNS configurado em `rejection_policy.destinations`.
+
+Eventos publicados pelo worker:
+
+- `domain_record_ready`: linha enriquecida lida de `curated`.
+- `ingestion.records-rejected`: linha rejeitada lida de `rejected`.
+- `ingestion.file-failed`: execucao parada por threshold ou erro de contrato depois da validacao do produto.
 
 ## Testes
 
