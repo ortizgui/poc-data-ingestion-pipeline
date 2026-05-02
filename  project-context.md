@@ -26,6 +26,14 @@ Mandatory unless user explicitly says otherwise.
 - Prefer caveman for token optimization before calling any model.
 - Keep responses terse, high-signal, low-token.
 - Keep code, commands, paths, schemas exact.
+- All edits to this file must be written in caveman style (no articles, fragments OK, short synonyms, technical terms exact).
+
+## Local Execution Policy
+
+- Simulate AWS via MiniStack to maximum extent possible.
+- Use `boto3` against `localhost:4566` for all AWS services MiniStack supports (S3, DynamoDB, SQS, SNS, EventBridge, Step Functions, Glue, STS).
+- Only use local alternatives (scripts, file I/O) when MiniStack lacks the service or the emulation is too incomplete to be useful.
+- Document any local-only deviation clearly so real-AWS path remains obvious.
 
 ## Target Flow
 
