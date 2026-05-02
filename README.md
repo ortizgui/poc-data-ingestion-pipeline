@@ -148,7 +148,7 @@ sequenceDiagram
 - `glue_landing.py`, `glue_harmonization.py`, `enrichment_batch.py`: jobs locais equivalentes aos passos Glue/batch.
 - `analytics_writer.py`: escritas compartilhadas de fatos analiticos no bucket `poc-data-ingestion-analytics`.
 - `analytics_queries.py`: simulacao local do Athena via DuckDB - carrega arquivos do S3 analytics/lake e executa queries operacionais.
-- `glue_catalog.py`: bootstrap do Glue Data Catalog (database `poc_data_ingestion_analytics` com 8 tabelas + database `poc_data_ingestion_business` com curated/raw/processed/rejected).
+- `glue_catalog.py`: bootstrap do Glue Data Catalog (database `poc_data_ingestion_analytics` com 2 tabelas: runs + steps enriquecidos; database `poc_data_ingestion_business` com curated/raw/processed/rejected).
 - `athena_views.sql`: 10 views Athena para dashboards operacionais e analise de negocios/TI.
 - `ecs_worker.py`: script Python que representa ECS batch; consome SQS gerado por S3 notification, le S3 `curated` ou `rejected`, busca destinos no DynamoDB e publica SNS.
 - `e2e_test.py`: teste ponta a ponta local contra MiniStack.
@@ -284,7 +284,7 @@ Resultado esperado do E2E:
 - S3 notification: `data-lake` prefix `rejected/` suffix `.jsonl` -> SQS `curated-files`.
 - SQS: `curated-files`, filas destino criadas pelo worker.
 - SNS: topicos destino criados pelo worker, incluindo destinos de dominio e qualidade.
-- Glue Data Catalog: databases `poc_data_ingestion_analytics` (8 tabelas de observabilidade) e `poc_data_ingestion_business` (curated, raw, processed, rejected).
+- Glue Data Catalog: databases `poc_data_ingestion_analytics` (2 tabelas: runs + enriched steps) e `poc_data_ingestion_business` (curated, raw, processed, rejected).
 - Athena: views operacionais definidas em `athena_views.sql` com joins entre analytics e business lake.
 
 ## Consultas Analytics (Glue + Athena)

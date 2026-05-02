@@ -8,7 +8,7 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-from analytics_writer import emit_error_event, emit_execution_event, emit_ingestion_run
+from analytics_writer import emit_ingestion_run, emit_ingestion_step
 from aws_local import (
     ANALYTICS_BUCKET,
     CONFIG_TABLE,
@@ -86,7 +86,6 @@ def write_run_analytics(
 ) -> str:
     started_at = state.get("started_at") or utc_now()
     finished_at = utc_now()
-    domain = event_context.get("domain") or event_context.get("product_config", {}).get("domain") or "unknown"
     path = emit_ingestion_run(
         aws,
         event_context,
@@ -110,34 +109,6 @@ def write_run_analytics(
         rejected_path=", ".join(f"s3://{DATA_BUCKET}/{key}" for key in state.get("rejection_keys", [])),
         error_message=error_message,
     )
-    emit_execution_event(
-        aws,
-        event_context,
-        domain=domain,
-        step_name=failure_step or "FinalizeExecution",
-        event_type="ingestion_succeeded" if status == "SUCCEEDED" else "ingestion_failed",
-        event_source="local_sfn_runner",
-        event_message=error_message or f"ingestion {status.lower()}",
-        event_payload_ref=execution_arn or path,
-        event_at=finished_at,
-    )
-    if status == "FAILED":
-        emit_error_event(
-            aws,
-            event_context,
-            domain=domain,
-            step_name=failure_step or "FinalizeExecution",
-            error_type="PipelineError",
-            error_code="state_machine_failed",
-            error_message=error_message or "pipeline failed",
-            error_category="pipeline",
-            glue_job_name="",
-            glue_job_run_id=event_context.get("execution_id") or state.get("execution_id") or state.get("run_id", "unknown"),
-            source_bucket=event_context.get("source_bucket", SOURCE_BUCKET),
-            source_key=event_context.get("source_key", ""),
-            payload_ref=execution_arn or path,
-            occurred_at=finished_at,
-        )
     return path
 
 
@@ -209,15 +180,20 @@ def execute_resource(resource: str, state: dict[str, Any], aws: Any, evidence: E
             f"ingestion_id={event['ingestion_id']} execution_id={event['execution_id']} anomesdia={event['anomesdia']}",
             state.get("execution_arn"),
         )
-        emit_execution_event(
+        emit_ingestion_step(
             aws,
             event,
             step_name="InitExecution",
-            event_type="ingestion_started",
-            event_source="local_sfn_runner",
-            event_message="execution context prepared",
-            event_payload_ref=state.get("execution_arn") or event["execution_id"],
-            event_at=utc_now(),
+            step_order=1,
+            glue_job_name="local_sfn_runner",
+            glue_job_run_id=event.get("execution_id", state["run_id"]),
+            status="SUCCEEDED",
+            started_at=utc_now(),
+            finished_at=utc_now(),
+            input_records=0,
+            output_records=0,
+            input_path="",
+            output_path="",
         )
         return {**state, "event": event, "started_at": utc_now()}
 

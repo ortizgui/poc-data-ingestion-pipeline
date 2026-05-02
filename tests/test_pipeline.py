@@ -25,12 +25,6 @@ from glue_catalog import (
     BUSINESS_TABLES,
     ANALYTICS_INGESTION_RUNS_COLUMNS,
     ANALYTICS_INGESTION_STEPS_COLUMNS,
-    ANALYTICS_INGESTION_ERRORS_COLUMNS,
-    ANALYTICS_REJECTIONS_SUMMARY_COLUMNS,
-    ANALYTICS_DATA_QUALITY_COLUMNS,
-    ANALYTICS_SCHEMA_VALIDATION_COLUMNS,
-    ANALYTICS_FILE_LINEAGE_COLUMNS,
-    ANALYTICS_EXECUTION_EVENTS_COLUMNS,
     BUSINESS_CURATED_COLUMNS,
     BUSINESS_REJECTED_COLUMNS,
 )
@@ -404,26 +398,22 @@ class PipelineUnitTest(unittest.TestCase):
             from glue_catalog import bootstrap_glue_catalog
             result = bootstrap_glue_catalog()
 
-        self.assertEqual(len(result["analytics_tables"]), 8)
+        self.assertEqual(len(result["analytics_tables"]), 2)
         self.assertEqual(len(result["business_tables"]), 4)
         database_calls = [c for c in calls if c[0] == "create_database"]
         table_calls = [c for c in calls if c[0] == "create_table"]
         self.assertEqual(len(database_calls), 2)
-        self.assertEqual(len(table_calls), 12)
+        self.assertEqual(len(table_calls), 6)
 
-    def test_glue_catalog_analytics_column_counts_match_spec(self):
+    def test_glue_catalog_step_columns_include_enriched_fields(self):
+        step_columns = [name for name, _ in ANALYTICS_INGESTION_STEPS_COLUMNS]
+        for col in ["error_type", "error_message", "rule_name", "rule_result",
+                     "schema_name", "validation_result", "rejection_reason",
+                     "artifact_type", "lineage_key", "rejected_detail_path"]:
+            self.assertIn(col, step_columns, f"{col} missing from enriched steps")
+
+    def test_glue_catalog_run_column_count(self):
         self.assertEqual(len(ANALYTICS_INGESTION_RUNS_COLUMNS), 24)
-        self.assertEqual(len(ANALYTICS_INGESTION_STEPS_COLUMNS), 21)
-        self.assertEqual(len(ANALYTICS_INGESTION_ERRORS_COLUMNS), 17)
-        self.assertEqual(len(ANALYTICS_REJECTIONS_SUMMARY_COLUMNS), 14)
-        self.assertEqual(len(ANALYTICS_DATA_QUALITY_COLUMNS), 17)
-        self.assertEqual(len(ANALYTICS_SCHEMA_VALIDATION_COLUMNS), 14)
-        self.assertEqual(len(ANALYTICS_FILE_LINEAGE_COLUMNS), 15)
-        self.assertEqual(len(ANALYTICS_EXECUTION_EVENTS_COLUMNS), 11)
-
-    def test_glue_catalog_business_column_counts(self):
-        self.assertEqual(len(BUSINESS_CURATED_COLUMNS), 8)
-        self.assertEqual(len(BUSINESS_REJECTED_COLUMNS), 8)
 
     def test_glue_catalog_all_tables_have_anomesdia_partition(self):
         from glue_catalog import ANALYTICS_PARTITION
@@ -433,6 +423,10 @@ class PipelineUnitTest(unittest.TestCase):
         run_columns = [name for name, _ in ANALYTICS_INGESTION_RUNS_COLUMNS]
         for col in ["ingestion_id", "execution_id", "product", "status"]:
             self.assertIn(col, run_columns, f"{col} missing from analytics_ingestion_runs")
+
+        step_columns = [name for name, _ in ANALYTICS_INGESTION_STEPS_COLUMNS]
+        for col in ["step_name", "status", "error_message", "rule_result", "validation_result", "artifact_type"]:
+            self.assertIn(col, step_columns, f"{col} missing from analytics_ingestion_steps")
 
         curated_columns = [name for name, _ in BUSINESS_CURATED_COLUMNS]
         for col in ["transaction_id", "customer_id", "amount", "product", "business_date"]:

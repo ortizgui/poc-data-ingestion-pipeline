@@ -14,12 +14,6 @@ from aws_local import ANALYTICS_BUCKET, AWS_ENDPOINT_URL, AWS_REGION, DATA_BUCKE
 ANALYTICS_PREFIXES = {
     "analytics_ingestion_runs": "observability/ingestion_runs",
     "analytics_ingestion_steps": "observability/ingestion_steps",
-    "analytics_ingestion_errors": "observability/ingestion_errors",
-    "analytics_ingestion_rejections_summary": "observability/ingestion_rejections",
-    "analytics_data_quality_summary": "quality/data_quality_summary",
-    "analytics_schema_validation": "quality/schema_validation",
-    "analytics_file_lineage": "audit/file_lineage",
-    "analytics_execution_events": "audit/execution_events",
 }
 
 BUSINESS_PREFIXES = {
@@ -82,6 +76,14 @@ def _load_table(con: duckdb.DuckDBPyConnection, table_name: str, bucket: str, pr
         os.unlink(tmp_path)
 
 
+def _has_column(con: duckdb.DuckDBPyConnection, table: str, column: str) -> bool:
+    try:
+        con.execute(f"SELECT {column} FROM {table} LIMIT 0")
+        return True
+    except Exception:
+        return False
+
+
 def run_analytics_queries() -> dict[str, Any]:
     con = duckdb.connect(":memory:")
 
@@ -104,6 +106,16 @@ def run_analytics_queries() -> dict[str, Any]:
             ORDER BY anomesdia, product
         """
 
+        queries["troubleshooting_dashboard"] = """
+            SELECT anomesdia, product, status AS run_status,
+                   source_bucket, source_key, source_file_name,
+                   total_records, processed_records, rejected_records, error_records,
+                   failure_step, error_message AS run_error,
+                   raw_path, processed_path, curated_path, rejected_path
+            FROM analytics_ingestion_runs
+            ORDER BY anomesdia, product
+        """
+
     if table_counts.get("analytics_ingestion_steps", 0) > 0:
         queries["steps_summary"] = """
             SELECT anomesdia, product, step_order, step_name, status, count(*) AS attempts,
@@ -115,61 +127,54 @@ def run_analytics_queries() -> dict[str, Any]:
             ORDER BY anomesdia, product, step_order, step_name
         """
 
-    if table_counts.get("analytics_ingestion_errors", 0) > 0:
-        queries["errors_by_product"] = """
-            SELECT anomesdia, product, step_name, error_type, error_category, count(*) AS errors
-            FROM analytics_ingestion_errors
-            GROUP BY anomesdia, product, step_name, error_type, error_category
-            ORDER BY anomesdia, product
-        """
+        has_enriched = _has_column(con, "analytics_ingestion_steps", "error_type")
+        if has_enriched:
+            queries["errors_from_steps"] = """
+                SELECT anomesdia, product, step_name, error_type, error_code,
+                       error_message, error_category, source_bucket, source_key, occurred_at
+                FROM analytics_ingestion_steps
+                WHERE error_message IS NOT NULL AND error_message != ''
+                ORDER BY anomesdia, product, occurred_at
+            """
 
-    if table_counts.get("analytics_ingestion_rejections_summary", 0) > 0:
-        queries["rejections_summary"] = """
-            SELECT anomesdia, product, step_name, rejection_reason,
-                   sum(rejected_count) AS total_rejected,
-                   round(avg(rejection_percent), 2) AS avg_pct,
-                   min(rejected_detail_path) AS detail_path,
-                   min(sample_message) AS sample
-            FROM analytics_ingestion_rejections_summary
-            GROUP BY anomesdia, product, step_name, rejection_reason
-            ORDER BY anomesdia, product
-        """
+            queries["quality_from_steps"] = """
+                SELECT anomesdia, product, step_name, rule_name, rule_type, rule_result,
+                       sum(valid_records) AS valid_records,
+                       sum(invalid_records) AS invalid_records
+                FROM analytics_ingestion_steps
+                WHERE rule_name IS NOT NULL AND rule_name != ''
+                GROUP BY anomesdia, product, step_name, rule_name, rule_type, rule_result
+                ORDER BY anomesdia, product
+            """
 
-    if table_counts.get("analytics_data_quality_summary", 0) > 0:
-        queries["data_quality"] = """
-            SELECT anomesdia, product, step_name, rule_name, rule_result,
-                   sum(total_records) AS total_records,
-                   sum(valid_records) AS valid_records,
-                   sum(invalid_records) AS invalid_records
-            FROM analytics_data_quality_summary
-            GROUP BY anomesdia, product, step_name, rule_name, rule_result
-            ORDER BY anomesdia, product
-        """
+            queries["schema_from_steps"] = """
+                SELECT anomesdia, product, step_name, schema_name, validation_result,
+                       missing_columns, unexpected_columns, validated_at
+                FROM analytics_ingestion_steps
+                WHERE schema_name IS NOT NULL AND schema_name != ''
+                ORDER BY anomesdia, product, validated_at
+            """
 
-    if table_counts.get("analytics_schema_validation", 0) > 0:
-        queries["schema_validation"] = """
-            SELECT anomesdia, product, step_name, validation_result, count(*) AS checks
-            FROM analytics_schema_validation
-            GROUP BY anomesdia, product, step_name, validation_result
-            ORDER BY anomesdia, product
-        """
+            queries["rejections_from_steps"] = """
+                SELECT anomesdia, product, step_name, rejection_reason, rejection_category,
+                       sum(rejected_count_summary) AS total_rejected,
+                       round(avg(rejection_percent), 2) AS avg_pct,
+                       min(rejected_detail_path) AS detail_path,
+                       min(sample_message) AS sample
+                FROM analytics_ingestion_steps
+                WHERE rejection_reason IS NOT NULL AND rejection_reason != ''
+                GROUP BY anomesdia, product, step_name, rejection_reason, rejection_category
+                ORDER BY anomesdia, product
+            """
 
-    if table_counts.get("analytics_file_lineage", 0) > 0:
-        queries["file_lineage"] = """
-            SELECT anomesdia, product, artifact_type, count(*) AS files,
-                   sum(record_count) AS total_records
-            FROM analytics_file_lineage
-            GROUP BY anomesdia, product, artifact_type
-            ORDER BY anomesdia, product, artifact_type
-        """
-
-    if table_counts.get("analytics_execution_events", 0) > 0:
-        queries["execution_events"] = """
-            SELECT anomesdia, product, event_type, count(*) AS events
-            FROM analytics_execution_events
-            GROUP BY anomesdia, product, event_type
-            ORDER BY anomesdia, product
-        """
+            queries["lineage_from_steps"] = """
+                SELECT anomesdia, product, artifact_type, count(*) AS files,
+                       sum(record_count_lineage) AS total_records
+                FROM analytics_ingestion_steps
+                WHERE artifact_type IS NOT NULL AND artifact_type != ''
+                GROUP BY anomesdia, product, artifact_type
+                ORDER BY anomesdia, product, artifact_type
+            """
 
     if table_counts.get("business_curated", 0) > 0 and table_counts.get("analytics_ingestion_runs", 0) > 0:
         queries["curated_with_run_context"] = """
@@ -191,27 +196,18 @@ def run_analytics_queries() -> dict[str, Any]:
             ORDER BY product, stage
         """
 
-    if table_counts.get("analytics_ingestion_errors", 0) > 0 and table_counts.get("analytics_ingestion_runs", 0) > 0:
-        queries["error_detail_with_source"] = """
-            SELECT e.anomesdia, e.product, e.step_name, e.error_type, e.error_code,
-                   e.error_message, e.error_category, e.occurred_at,
-                   e.source_bucket, e.source_key,
-                   r.source_file_name, r.status AS run_status
-            FROM analytics_ingestion_errors e
-            LEFT JOIN analytics_ingestion_runs r ON e.ingestion_id = r.ingestion_id
-            ORDER BY e.anomesdia, e.product, e.occurred_at
-        """
-
-    if table_counts.get("analytics_ingestion_runs", 0) > 0:
-        queries["troubleshooting_dashboard"] = """
-            SELECT r.anomesdia, r.product, r.status AS run_status,
-                   r.source_bucket, r.source_key, r.source_file_name,
-                   r.total_records, r.processed_records, r.rejected_records, r.error_records,
-                   r.failure_step, r.error_message AS run_error,
-                   CASE WHEN r.rejected_records > 0 THEN 1 ELSE 0 END AS has_rejections
-            FROM analytics_ingestion_runs r
-            ORDER BY r.anomesdia, r.product
-        """
+    if table_counts.get("analytics_ingestion_steps", 0) > 0 and table_counts.get("analytics_ingestion_runs", 0) > 0:
+        if _has_column(con, "analytics_ingestion_steps", "error_type"):
+            queries["error_detail_with_source"] = """
+                SELECT s.anomesdia, s.product, s.step_name, s.error_type, s.error_code,
+                       s.error_message, s.error_category, s.occurred_at,
+                       s.source_bucket, s.source_key,
+                       r.source_file_name, r.status AS run_status
+                FROM analytics_ingestion_steps s
+                LEFT JOIN analytics_ingestion_runs r ON s.ingestion_id = r.ingestion_id
+                WHERE s.error_message IS NOT NULL AND s.error_message != ''
+                ORDER BY s.anomesdia, s.product, s.occurred_at
+            """
 
     results: dict[str, Any] = {"table_counts": table_counts, "queries": {}}
     for name, sql in queries.items():
@@ -237,7 +233,7 @@ def print_analytics_report(result: dict[str, Any]) -> None:
 
     for name, rows in result.get("queries", {}).items():
         if isinstance(rows, dict) and "error" in rows:
-            print(f"\n--- {name}: ERROR: {rows['error']}")
+            print(f"\n--- {name}: ERROR: {rows['error'][:120]}")
             continue
         print(f"\n--- {name} ({len(rows)} rows) ---")
         for row in rows:

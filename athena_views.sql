@@ -1,6 +1,6 @@
 -- Athena views for operational dashboards
 -- Run against poc_data_ingestion_analytics database
--- Pre-requisite: Glue Data Catalog tables registered via glue_catalog.py
+-- Uses analytics_ingestion_runs + analytics_ingestion_steps (enriched with all step-level facts)
 
 -- Daily ingestion status overview
 CREATE OR REPLACE VIEW vw_ingestion_status_by_day AS
@@ -17,108 +17,110 @@ SELECT
 FROM analytics_ingestion_runs
 GROUP BY anomesdia, product, domain, status;
 
--- Errors grouped by product and step for IT diagnostics
-CREATE OR REPLACE VIEW vw_ingestion_errors_by_product AS
+-- Unified troubleshooting: every run with source file, counts, paths, error info
+CREATE OR REPLACE VIEW vw_troubleshooting_dashboard AS
 SELECT
     anomesdia,
     product,
-    step_name,
-    error_type,
-    error_category,
-    COUNT(*) AS error_count,
-    MIN(occurred_at) AS first_occurrence,
-    MAX(occurred_at) AS last_occurrence
-FROM analytics_ingestion_errors
-GROUP BY anomesdia, product, step_name, error_type, error_category;
+    domain,
+    status AS run_status,
+    source_bucket,
+    source_key,
+    source_file_name,
+    ingestion_id,
+    execution_id,
+    total_records,
+    processed_records,
+    rejected_records,
+    error_records,
+    failure_step,
+    error_message AS run_error,
+    started_at,
+    finished_at,
+    raw_path,
+    processed_path,
+    curated_path,
+    rejected_path,
+    CASE WHEN rejected_records > 0 THEN 1 ELSE 0 END AS has_rejections
+FROM analytics_ingestion_runs;
 
--- Step duration metrics for performance monitoring
-CREATE OR REPLACE VIEW vw_ingestion_duration_by_step AS
+-- Step summary with record flow (core step fields)
+CREATE OR REPLACE VIEW vw_ingestion_steps_summary AS
 SELECT
-    anomesdia,
-    product,
-    step_name,
-    COUNT(*) AS step_count,
-    COALESCE(AVG(duration_seconds), 0) AS avg_duration_seconds,
-    COALESCE(MAX(duration_seconds), 0) AS max_duration_seconds,
-    COALESCE(SUM(input_records), 0) AS total_input_records
+    anomesdia, product, step_order, step_name, status,
+    COUNT(*) AS attempts,
+    SUM(input_records) AS input_records,
+    SUM(output_records) AS output_records,
+    SUM(rejected_records) AS rejected_records,
+    SUM(error_records) AS error_records,
+    AVG(duration_seconds) AS avg_duration_seconds
 FROM analytics_ingestion_steps
-WHERE status = 'SUCCEEDED'
-GROUP BY anomesdia, product, step_name;
+GROUP BY anomesdia, product, step_order, step_name, status;
 
--- Rejection analysis by reason for business quality reviews
-CREATE OR REPLACE VIEW vw_rejections_by_reason AS
+-- Errors extracted from step rows (where error_message is populated)
+CREATE OR REPLACE VIEW vw_errors_with_source AS
 SELECT
-    anomesdia,
-    product,
-    step_name,
-    rejection_reason,
-    rejection_category,
-    SUM(rejected_count) AS total_rejected,
-    AVG(rejection_percent) AS avg_rejection_percent,
-    COUNT(*) AS occurrence_count,
-    MIN(rejected_detail_path) AS rejected_detail_path,
-    MIN(sample_message) AS sample_message
-FROM analytics_ingestion_rejections_summary
-GROUP BY anomesdia, product, step_name, rejection_reason, rejection_category;
+    s.anomesdia,
+    s.product,
+    s.step_name,
+    s.error_type,
+    s.error_code,
+    s.error_message,
+    s.error_category,
+    s.occurred_at,
+    s.source_bucket,
+    s.source_key,
+    r.source_file_name,
+    r.ingestion_id,
+    r.execution_id,
+    r.status AS run_status
+FROM analytics_ingestion_steps s
+LEFT JOIN analytics_ingestion_runs r ON s.ingestion_id = r.ingestion_id
+WHERE s.error_message IS NOT NULL AND s.error_message != '';
 
--- Data quality metrics for dashboard and SLA tracking
-CREATE OR REPLACE VIEW vw_data_quality_by_product AS
+-- Quality results extracted from step rows
+CREATE OR REPLACE VIEW vw_quality_results AS
 SELECT
-    anomesdia,
-    product,
-    step_name,
-    rule_name,
-    rule_type,
-    rule_result,
-    SUM(total_records) AS total_records,
+    anomesdia, product, step_name, rule_name, rule_type, rule_result,
     SUM(valid_records) AS valid_records,
     SUM(invalid_records) AS invalid_records,
-    SUM(warning_records) AS warning_records
-FROM analytics_data_quality_summary
+    SUM(warning_records) AS warning_records,
+    MIN(threshold_value) AS threshold_value,
+    MIN(measured_value) AS measured_value
+FROM analytics_ingestion_steps
+WHERE rule_name IS NOT NULL AND rule_name != ''
 GROUP BY anomesdia, product, step_name, rule_name, rule_type, rule_result;
 
--- Schema validation results for contract monitoring
-CREATE OR REPLACE VIEW vw_schema_validation_by_product AS
+-- Schema validation results extracted from step rows
+CREATE OR REPLACE VIEW vw_schema_validation_results AS
 SELECT
-    anomesdia,
-    product,
-    step_name,
-    schema_name,
-    validation_result,
-    COUNT(*) AS validation_count,
-    MIN(validated_at) AS first_validated_at,
-    MAX(validated_at) AS last_validated_at
-FROM analytics_schema_validation
-GROUP BY anomesdia, product, step_name, schema_name, validation_result;
+    anomesdia, product, step_name, schema_name, schema_version,
+    validation_result, missing_columns, unexpected_columns,
+    validation_message, validated_at
+FROM analytics_ingestion_steps
+WHERE schema_name IS NOT NULL AND schema_name != '';
 
--- File lineage for audit trail
-CREATE OR REPLACE VIEW vw_file_lineage_timeline AS
+-- Rejection summary extracted from step rows
+CREATE OR REPLACE VIEW vw_rejections_summary AS
 SELECT
-    anomesdia,
-    product,
-    artifact_type,
-    s3_key,
-    format,
-    record_count,
-    file_size_bytes,
-    parent_key,
-    created_at
-FROM analytics_file_lineage
-WHERE artifact_type IN ('raw', 'processed', 'curated')
-ORDER BY anomesdia, product, created_at;
+    anomesdia, product, step_name, rejection_reason, rejection_category,
+    SUM(rejected_count_summary) AS total_rejected,
+    AVG(rejection_percent) AS avg_rejection_percent,
+    MIN(rejected_detail_path) AS rejected_detail_path,
+    MIN(sample_message) AS sample_message
+FROM analytics_ingestion_steps
+WHERE rejection_reason IS NOT NULL AND rejection_reason != ''
+GROUP BY anomesdia, product, step_name, rejection_reason, rejection_category;
 
--- Execution event timeline for detailed tracing
-CREATE OR REPLACE VIEW vw_execution_timeline AS
+-- File lineage extracted from step rows
+CREATE OR REPLACE VIEW vw_file_lineage AS
 SELECT
-    anomesdia,
-    product,
-    step_name,
-    event_type,
-    event_source,
-    event_message,
-    event_at
-FROM analytics_execution_events
-ORDER BY anomesdia, product, event_at;
+    anomesdia, product, step_name, artifact_type, artifact_role,
+    lineage_bucket, lineage_key, lineage_format,
+    record_count_lineage, file_size_bytes,
+    parent_bucket, parent_key, lineage_created_at
+FROM analytics_ingestion_steps
+WHERE artifact_type IS NOT NULL AND artifact_type != '';
 
 -- Business curated data combined with ingestion run context
 CREATE OR REPLACE VIEW vw_curated_with_run_context AS
@@ -133,7 +135,10 @@ SELECT
     c.enriched_at,
     r.status AS run_status,
     r.execution_id,
-    r.ingestion_id
+    r.ingestion_id,
+    r.source_bucket,
+    r.source_key,
+    r.source_file_name
 FROM poc_data_ingestion_business.business_curated c
 LEFT JOIN analytics_ingestion_runs r
     ON c.product = r.product
@@ -152,35 +157,14 @@ SELECT
     rj.reason,
     rj.raw_row,
     r.status AS run_status,
-    r.ingestion_id
+    r.ingestion_id,
+    r.source_file_name
 FROM poc_data_ingestion_business.business_rejected rj
 LEFT JOIN analytics_ingestion_runs r
     ON rj.product = r.product
     AND replace(rj.business_date, '-', '') = r.anomesdia;
 
--- Error detail with source file for IT diagnostics (non-aggregated)
-CREATE OR REPLACE VIEW vw_error_detail_with_source AS
-SELECT
-    e.anomesdia,
-    e.product,
-    e.step_name,
-    e.error_type,
-    e.error_code,
-    e.error_message,
-    e.error_category,
-    e.occurred_at,
-    e.source_bucket,
-    e.source_key,
-    e.payload_ref,
-    r.source_file_name,
-    r.ingestion_id,
-    r.execution_id,
-    r.status AS run_status
-FROM analytics_ingestion_errors e
-LEFT JOIN analytics_ingestion_runs r
-    ON e.ingestion_id = r.ingestion_id;
-
--- Ingested records with full source traceability for business + TI
+-- Curated records with full source traceability
 CREATE OR REPLACE VIEW vw_ingested_with_source AS
 SELECT
     c.transaction_id,
@@ -205,30 +189,3 @@ LEFT JOIN analytics_ingestion_runs r
     ON c.product = r.product
     AND replace(c.business_date, '-', '') = r.anomesdia
     AND r.status = 'SUCCEEDED';
-
--- Unified troubleshooting: runs with errors, rejections, and file lineage in one view
-CREATE OR REPLACE VIEW vw_troubleshooting_dashboard AS
-SELECT
-    r.anomesdia,
-    r.product,
-    r.domain,
-    r.status AS run_status,
-    r.source_bucket,
-    r.source_key,
-    r.source_file_name,
-    r.ingestion_id,
-    r.execution_id,
-    r.total_records,
-    r.processed_records,
-    r.rejected_records,
-    r.error_records,
-    r.failure_step,
-    r.error_message AS run_error,
-    r.started_at,
-    r.finished_at,
-    r.raw_path,
-    r.processed_path,
-    r.curated_path,
-    r.rejected_path,
-    CASE WHEN r.rejected_records > 0 THEN 1 ELSE 0 END AS has_rejections
-FROM analytics_ingestion_runs r;

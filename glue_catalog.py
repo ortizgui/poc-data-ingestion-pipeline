@@ -119,72 +119,24 @@ ANALYTICS_INGESTION_STEPS_COLUMNS: list[tuple[str, str]] = [
     ("input_path", "string"),
     ("output_path", "string"),
     ("error_message", "string"),
-]
-
-ANALYTICS_INGESTION_ERRORS_COLUMNS: list[tuple[str, str]] = [
-    ("ingestion_id", "string"),
-    ("execution_id", "string"),
-    ("correlation_id", "string"),
-    ("product", "string"),
-    ("domain", "string"),
-    ("step_name", "string"),
     ("error_type", "string"),
     ("error_code", "string"),
-    ("error_message", "string"),
     ("error_category", "string"),
     ("is_retryable", "boolean"),
-    ("glue_job_name", "string"),
-    ("glue_job_run_id", "string"),
     ("source_bucket", "string"),
     ("source_key", "string"),
     ("payload_ref", "string"),
     ("occurred_at", "string"),
-]
-
-ANALYTICS_REJECTIONS_SUMMARY_COLUMNS: list[tuple[str, str]] = [
-    ("ingestion_id", "string"),
-    ("execution_id", "string"),
-    ("correlation_id", "string"),
-    ("product", "string"),
-    ("domain", "string"),
-    ("step_name", "string"),
-    ("rejection_reason", "string"),
-    ("rejection_category", "string"),
-    ("rejected_count", "bigint"),
-    ("total_step_records", "bigint"),
-    ("rejection_percent", "double"),
-    ("rejected_detail_path", "string"),
-    ("sample_message", "string"),
-    ("occurred_at", "string"),
-]
-
-ANALYTICS_DATA_QUALITY_COLUMNS: list[tuple[str, str]] = [
-    ("ingestion_id", "string"),
-    ("execution_id", "string"),
-    ("correlation_id", "string"),
-    ("product", "string"),
-    ("domain", "string"),
-    ("step_name", "string"),
     ("rule_name", "string"),
     ("rule_type", "string"),
     ("rule_result", "string"),
-    ("total_records", "bigint"),
     ("valid_records", "bigint"),
     ("invalid_records", "bigint"),
     ("warning_records", "bigint"),
     ("threshold_value", "string"),
     ("measured_value", "string"),
-    ("details", "string"),
+    ("quality_details", "string"),
     ("measured_at", "string"),
-]
-
-ANALYTICS_SCHEMA_VALIDATION_COLUMNS: list[tuple[str, str]] = [
-    ("ingestion_id", "string"),
-    ("execution_id", "string"),
-    ("correlation_id", "string"),
-    ("product", "string"),
-    ("domain", "string"),
-    ("step_name", "string"),
     ("schema_name", "string"),
     ("schema_version", "string"),
     ("validation_result", "string"),
@@ -193,41 +145,24 @@ ANALYTICS_SCHEMA_VALIDATION_COLUMNS: list[tuple[str, str]] = [
     ("invalid_types", "string"),
     ("validation_message", "string"),
     ("validated_at", "string"),
-]
-
-ANALYTICS_FILE_LINEAGE_COLUMNS: list[tuple[str, str]] = [
-    ("ingestion_id", "string"),
-    ("execution_id", "string"),
-    ("correlation_id", "string"),
-    ("product", "string"),
-    ("domain", "string"),
+    ("rejection_reason", "string"),
+    ("rejection_category", "string"),
+    ("rejected_count_summary", "bigint"),
+    ("total_step_records_summary", "bigint"),
+    ("rejection_percent", "double"),
+    ("rejected_detail_path", "string"),
+    ("sample_message", "string"),
     ("artifact_type", "string"),
     ("artifact_role", "string"),
-    ("bucket", "string"),
-    ("s3_key", "string"),
-    ("format", "string"),
-    ("record_count", "bigint"),
+    ("lineage_bucket", "string"),
+    ("lineage_key", "string"),
+    ("lineage_format", "string"),
+    ("record_count_lineage", "bigint"),
     ("file_size_bytes", "bigint"),
     ("parent_bucket", "string"),
     ("parent_key", "string"),
-    ("created_at", "string"),
+    ("lineage_created_at", "string"),
 ]
-
-ANALYTICS_EXECUTION_EVENTS_COLUMNS: list[tuple[str, str]] = [
-    ("ingestion_id", "string"),
-    ("execution_id", "string"),
-    ("correlation_id", "string"),
-    ("product", "string"),
-    ("domain", "string"),
-    ("step_name", "string"),
-    ("event_type", "string"),
-    ("event_source", "string"),
-    ("event_message", "string"),
-    ("event_payload_ref", "string"),
-    ("event_at", "string"),
-]
-
-ANALYTICS_PARTITION = [("anomesdia", "string")]
 
 BUSINESS_RAW_COLUMNS: list[tuple[str, str]] = [
     ("transaction_id", "string"),
@@ -271,15 +206,11 @@ BUSINESS_REJECTED_COLUMNS: list[tuple[str, str]] = [
 
 BUSINESS_PARTITION = [("year", "string"), ("month", "string"), ("day", "string")]
 
+ANALYTICS_PARTITION = [("anomesdia", "string")]
+
 ANALYTICS_TABLES: list[tuple[str, str, list[tuple[str, str]]]] = [
     ("analytics_ingestion_runs", "observability/ingestion_runs", ANALYTICS_INGESTION_RUNS_COLUMNS),
     ("analytics_ingestion_steps", "observability/ingestion_steps", ANALYTICS_INGESTION_STEPS_COLUMNS),
-    ("analytics_ingestion_errors", "observability/ingestion_errors", ANALYTICS_INGESTION_ERRORS_COLUMNS),
-    ("analytics_ingestion_rejections_summary", "observability/ingestion_rejections", ANALYTICS_REJECTIONS_SUMMARY_COLUMNS),
-    ("analytics_data_quality_summary", "quality/data_quality_summary", ANALYTICS_DATA_QUALITY_COLUMNS),
-    ("analytics_schema_validation", "quality/schema_validation", ANALYTICS_SCHEMA_VALIDATION_COLUMNS),
-    ("analytics_file_lineage", "audit/file_lineage", ANALYTICS_FILE_LINEAGE_COLUMNS),
-    ("analytics_execution_events", "audit/execution_events", ANALYTICS_EXECUTION_EVENTS_COLUMNS),
 ]
 
 BUSINESS_TABLES: list[tuple[str, str, list[tuple[str, str]]]] = [

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from analytics_writer import emit_execution_event, emit_file_lineage_event, emit_ingestion_step
+from analytics_writer import emit_ingestion_step
 from aws_local import DATA_BUCKET, SOURCE_BUCKET, partition_prefix, read_csv_text, s3_read_text, s3_write_text, utc_now
 
 
@@ -32,30 +32,16 @@ def run_landing(valid_event: dict[str, Any], aws: Any, run_id: str) -> tuple[str
             output_records=raw_rows,
             input_path=f"s3://{SOURCE_BUCKET}/{source_key}",
             output_path=f"s3://{DATA_BUCKET}/{raw_key}",
-        )
-        emit_file_lineage_event(
-            aws,
-            valid_event,
             artifact_type="raw",
             artifact_role="landing_output",
-            bucket=DATA_BUCKET,
-            s3_key=raw_key,
-            format="csv",
-            record_count=raw_rows,
+            lineage_bucket=DATA_BUCKET,
+            lineage_key=raw_key,
+            lineage_format="csv",
+            record_count_lineage=raw_rows,
             file_size_bytes=len(text.encode("utf-8")),
             parent_bucket=SOURCE_BUCKET,
             parent_key=source_key,
-            created_at=finished_at,
-        )
-        emit_execution_event(
-            aws,
-            valid_event,
-            step_name="LandingGlue",
-            event_type="step_completed",
-            event_source="glue_landing",
-            event_message=f"raw rows copied: {raw_rows}",
-            event_payload_ref=f"s3://{DATA_BUCKET}/{raw_key}",
-            event_at=finished_at,
+            lineage_created_at=finished_at,
         )
         return raw_key, raw_rows
     except Exception as exc:
@@ -76,15 +62,12 @@ def run_landing(valid_event: dict[str, Any], aws: Any, run_id: str) -> tuple[str
             input_path=f"s3://{SOURCE_BUCKET}/{source_key}",
             output_path=f"s3://{DATA_BUCKET}/{raw_key}",
             error_message=str(exc),
-        )
-        emit_execution_event(
-            aws,
-            valid_event,
-            step_name="LandingGlue",
-            event_type="step_failed",
-            event_source="glue_landing",
-            event_message=str(exc),
-            event_payload_ref=f"s3://{SOURCE_BUCKET}/{source_key}",
-            event_at=finished_at,
+            error_type=exc.__class__.__name__,
+            error_code="landing_failed",
+            error_category="pipeline",
+            source_bucket=SOURCE_BUCKET,
+            source_key=source_key,
+            payload_ref=f"s3://{SOURCE_BUCKET}/{source_key}",
+            occurred_at=finished_at,
         )
         raise

@@ -243,20 +243,12 @@ Current reusable helpers:
 
 - `analytics_dimensions()`
 - `emit_ingestion_run()`
-- `emit_ingestion_step()`
-- `emit_error_event()`
-- `emit_rejection_summary()`
-- `emit_data_quality_summary()`
-- `emit_schema_validation()`
-- `emit_file_lineage_event()`
-- `emit_execution_event()`
+- `emit_ingestion_step()` — enriched: carries error, quality, schema, rejection, lineage fields in single row per step attempt.'
 
 Reason:
 
-- avoid repeating `ingestion_id`, `execution_id`, `correlation_id`, `product`, `domain`, `anomesdia` in every flow;
-- keep analytics folder routing in one place;
-- reduce code drift between landing, harmonization, enrichment, finalizer;
-- simplify future table changes.
+- 2 emit functions cover all analytics facts;
+- error/quality/schema/rejection/lineage merged into step row — no separate tables;
 
 Guideline:
 
@@ -272,260 +264,45 @@ s3://poc-data-ingestion-analytics-<env>/
       anomesdia=20260502/
     ingestion_steps/
       anomesdia=20260502/
-    ingestion_errors/
-      anomesdia=20260502/
-    ingestion_rejections/
-      anomesdia=20260502/
-  quality/
-    data_quality_summary/
-      anomesdia=20260502/
-    schema_validation/
-      anomesdia=20260502/
-  audit/
-    file_lineage/
-      anomesdia=20260502/
-    execution_events/
-      anomesdia=20260502/
 ```
 
 Meaning:
 
-- `observability/ingestion_runs`: 1 row per ingestion run.
-- `observability/ingestion_steps`: 1 row per step attempt.
-- `observability/ingestion_errors`: relevant technical/functional errors.
-- `observability/ingestion_rejections`: rejection summary, not full rejected detail.
-- `quality/data_quality_summary`: rule results and metrics.
-- `quality/schema_validation`: schema/contract validation result.
-- `audit/file_lineage`: artifact lineage.
-- `audit/execution_events`: fine-grained execution trail.
+- `observability/ingestion_runs`: 1 row per ingestion run — status, counts, paths, error summary.
+- `observability/ingestion_steps`: 1 row per step attempt — enriched with error, quality, schema, rejection, lineage fields.
 
 ## Glue Catalog Tables
 
-Database:
+Databases:
 
-`poc_data_ingestion_analytics`
+- `poc_data_ingestion_analytics`: 2 enriched tables (runs + steps).
+- `poc_data_ingestion_business`: 4 business tables (raw, processed, curated, rejected).
 
 Tables:
 
-- `analytics_ingestion_runs`
-- `analytics_ingestion_steps`
-- `analytics_ingestion_errors`
-- `analytics_ingestion_rejections_summary`
-- `analytics_data_quality_summary`
-- `analytics_schema_validation`
-- `analytics_file_lineage`
-- `analytics_execution_events`
+- `analytics_ingestion_runs` — run-level with paths, counts, error summary.
+- `analytics_ingestion_steps` — enriched step row with error, quality, schema, rejection, lineage fields.
 
-All tables partition by `anomesdia`.
+All analytics tables partition by `anomesdia`. Business tables partition by `year/month/day`.
 
 ## Table Purpose + Grain
 
 ### analytics_ingestion_runs
 
-- purpose: final run status;
+- purpose: final run status + file traceability;
 - grain: 1 row per `ingestion_id`.
 
-### analytics_ingestion_steps
+### analytics_ingestion_steps (enriched)
 
-- purpose: step telemetry;
-- grain: 1 row per `ingestion_id + step_name + attempt`.
-
-### analytics_ingestion_errors
-
-- purpose: error diagnostics;
-- grain: 1 row per relevant error.
-
-### analytics_ingestion_rejections_summary
-
-- purpose: rejection dashboard;
-- grain: 1 row per `ingestion_id + step_name + rejection_reason`.
-
-### analytics_data_quality_summary
-
-- purpose: quality metrics;
-- grain: 1 row per rule evaluation.
-
-### analytics_schema_validation
-
-- purpose: schema/contract validation;
-- grain: 1 row per validation execution.
-
-### analytics_file_lineage
-
-- purpose: artifact traceability;
-- grain: 1 row per artifact.
-
-### analytics_execution_events
-
-- purpose: technical event history;
-- grain: 1 row per execution event.
-
-## Core Schemas
-
-### analytics_ingestion_runs
-
-- `ingestion_id string`
-- `execution_id string`
-- `correlation_id string`
-- `product string`
-- `domain string`
-- `source_system string`
-- `source_bucket string`
-- `source_key string`
-- `source_file_name string`
-- `source_file_etag string`
-- `status string`
-- `failure_step string`
-- `started_at timestamp`
-- `finished_at timestamp`
-- `duration_seconds bigint`
-- `total_records bigint`
-- `processed_records bigint`
-- `rejected_records bigint`
-- `error_records bigint`
-- `raw_path string`
-- `processed_path string`
-- `curated_path string`
-- `rejected_path string`
-- `error_message string`
-- `anomesdia string`
-
-### analytics_ingestion_steps
-
-- `ingestion_id string`
-- `execution_id string`
-- `correlation_id string`
-- `product string`
-- `domain string`
-- `step_name string`
-- `step_order int`
-- `attempt int`
-- `glue_job_name string`
-- `glue_job_run_id string`
-- `status string`
-- `started_at timestamp`
-- `finished_at timestamp`
-- `duration_seconds bigint`
-- `input_records bigint`
-- `output_records bigint`
-- `rejected_records bigint`
-- `error_records bigint`
-- `input_path string`
-- `output_path string`
-- `error_message string`
-- `anomesdia string`
-
-### analytics_ingestion_errors
-
-- `ingestion_id string`
-- `execution_id string`
-- `correlation_id string`
-- `product string`
-- `domain string`
-- `step_name string`
-- `error_type string`
-- `error_code string`
-- `error_message string`
-- `error_category string`
-- `is_retryable boolean`
-- `glue_job_name string`
-- `glue_job_run_id string`
-- `source_bucket string`
-- `source_key string`
-- `payload_ref string`
-- `occurred_at timestamp`
-- `anomesdia string`
-
-### analytics_ingestion_rejections_summary
-
-- `ingestion_id string`
-- `execution_id string`
-- `correlation_id string`
-- `product string`
-- `domain string`
-- `step_name string`
-- `rejection_reason string`
-- `rejection_category string`
-- `rejected_count bigint`
-- `total_step_records bigint`
-- `rejection_percent double`
-- `rejected_detail_path string`
-- `sample_message string`
-- `occurred_at timestamp`
-- `anomesdia string`
-
-### analytics_data_quality_summary
-
-- `ingestion_id string`
-- `execution_id string`
-- `correlation_id string`
-- `product string`
-- `domain string`
-- `step_name string`
-- `rule_name string`
-- `rule_type string`
-- `rule_result string`
-- `total_records bigint`
-- `valid_records bigint`
-- `invalid_records bigint`
-- `warning_records bigint`
-- `threshold_value string`
-- `measured_value string`
-- `details string`
-- `measured_at timestamp`
-- `anomesdia string`
-
-### analytics_schema_validation
-
-- `ingestion_id string`
-- `execution_id string`
-- `correlation_id string`
-- `product string`
-- `domain string`
-- `step_name string`
-- `schema_name string`
-- `schema_version string`
-- `validation_result string`
-- `missing_columns string`
-- `unexpected_columns string`
-- `invalid_types string`
-- `validation_message string`
-- `validated_at timestamp`
-- `anomesdia string`
-
-### analytics_file_lineage
-
-- `ingestion_id string`
-- `execution_id string`
-- `correlation_id string`
-- `product string`
-- `domain string`
-- `artifact_type string`
-- `artifact_role string`
-- `bucket string`
-- `s3_key string`
-- `format string`
-- `record_count bigint`
-- `file_size_bytes bigint`
-- `parent_bucket string`
-- `parent_key string`
-- `created_at timestamp`
-- `anomesdia string`
-
-### analytics_execution_events
-
-- `ingestion_id string`
-- `execution_id string`
-- `correlation_id string`
-- `product string`
-- `domain string`
-- `step_name string`
-- `event_type string`
-- `event_source string`
-- `event_message string`
-- `event_payload_ref string`
-- `event_at timestamp`
-- `anomesdia string`
+- purpose: rich step telemetry with error, quality, schema, rejection, lineage embedded;
+- grain: 1 row per step attempt.
+- columns grouped in blocks:
+  - **Core**: step_name, step_order, status, timing, record counts, I/O paths.
+  - **Error**: error_type, error_code, error_message, error_category, source_bucket, source_key, payload_ref, occurred_at.
+  - **Quality**: rule_name, rule_type, rule_result, valid/invalid/warning_records, threshold/measured values.
+  - **Schema**: schema_name, version, validation_result, missing/unexpected columns, validation_message.
+  - **Rejection**: rejection_reason, rejection_category, rejected_count_summary, rejection_percent, rejected_detail_path, sample_message.
+  - **Lineage**: artifact_type, artifact_role, lineage_bucket/key/format, record_count, file_size, parent_bucket/key.
 
 ## Partition Strategy
 
@@ -628,11 +405,12 @@ QuickSight uses Athena datasets from these views for operational dashboards.
 Success means:
 
 - business flow still works (curated + rejected downstream);
-- each ingestion writes analytics facts to all 8 datasets;
+- each ingestion writes 2 analytics tables (runs + enriched steps);
+- 1 step row tells full story (status + error + quality + schema + rejection + lineage);
 - failures also appear in analytics;
 - Glue Data Catalog tables registered for analytics + business lake;
 - Athena can query by `anomesdia` across both databases;
-- 10 operational views join analytics + business data;
+- troubleshooting views join step fields with run context;
 - QuickSight can build operational dashboards;
 - new products need low customization.
 

@@ -184,9 +184,9 @@ def main() -> int:
             if analytics_db and business_db:
                 analytics_tables = glue.get_tables(DatabaseName=ANALYTICS_DATABASE)
                 business_tables = glue.get_tables(DatabaseName=BUSINESS_DATABASE)
-                assert_true(len(analytics_tables.get("TableList", [])) == 8, f"expected 8 analytics tables, got {len(analytics_tables.get('TableList', []))}")
+                assert_true(len(analytics_tables.get("TableList", [])) == 2, f"expected 2 analytics tables, got {len(analytics_tables.get('TableList', []))}")
                 assert_true(len(business_tables.get("TableList", [])) == 4, f"expected 4 business tables, got {len(business_tables.get('TableList', []))}")
-                checks.append({"status": "OK", "check": "Glue Data Catalog databases and 12 tables created"})
+                checks.append({"status": "OK", "check": "Glue Data Catalog databases and 6 tables created"})
             else:
                 checks.append({"status": "WARN", "check": "Glue databases not found (MiniStack may not support Glue)"})
         except Exception:
