@@ -55,7 +55,9 @@ SELECT
     rejection_category,
     SUM(rejected_count) AS total_rejected,
     AVG(rejection_percent) AS avg_rejection_percent,
-    COUNT(*) AS occurrence_count
+    COUNT(*) AS occurrence_count,
+    MIN(rejected_detail_path) AS rejected_detail_path,
+    MIN(sample_message) AS sample_message
 FROM analytics_ingestion_rejections_summary
 GROUP BY anomesdia, product, step_name, rejection_reason, rejection_category;
 
@@ -135,7 +137,7 @@ SELECT
 FROM poc_data_ingestion_business.business_curated c
 LEFT JOIN analytics_ingestion_runs r
     ON c.product = r.product
-    AND c.business_date = r.anomesdia
+    AND replace(c.business_date, '-', '') = r.anomesdia
     AND r.status = 'SUCCEEDED';
 
 -- Rejected records with context for operational analysis
@@ -154,4 +156,79 @@ SELECT
 FROM poc_data_ingestion_business.business_rejected rj
 LEFT JOIN analytics_ingestion_runs r
     ON rj.product = r.product
-    AND rj.business_date = r.anomesdia;
+    AND replace(rj.business_date, '-', '') = r.anomesdia;
+
+-- Error detail with source file for IT diagnostics (non-aggregated)
+CREATE OR REPLACE VIEW vw_error_detail_with_source AS
+SELECT
+    e.anomesdia,
+    e.product,
+    e.step_name,
+    e.error_type,
+    e.error_code,
+    e.error_message,
+    e.error_category,
+    e.occurred_at,
+    e.source_bucket,
+    e.source_key,
+    e.payload_ref,
+    r.source_file_name,
+    r.ingestion_id,
+    r.execution_id,
+    r.status AS run_status
+FROM analytics_ingestion_errors e
+LEFT JOIN analytics_ingestion_runs r
+    ON e.ingestion_id = r.ingestion_id;
+
+-- Ingested records with full source traceability for business + TI
+CREATE OR REPLACE VIEW vw_ingested_with_source AS
+SELECT
+    c.transaction_id,
+    c.customer_id,
+    c.amount,
+    c.transaction_date,
+    c.domain,
+    c.product,
+    c.business_date,
+    r.anomesdia,
+    r.source_bucket,
+    r.source_key,
+    r.source_file_name,
+    r.ingestion_id,
+    r.execution_id,
+    r.status AS run_status,
+    r.raw_path,
+    r.processed_path,
+    r.curated_path
+FROM poc_data_ingestion_business.business_curated c
+LEFT JOIN analytics_ingestion_runs r
+    ON c.product = r.product
+    AND replace(c.business_date, '-', '') = r.anomesdia
+    AND r.status = 'SUCCEEDED';
+
+-- Unified troubleshooting: runs with errors, rejections, and file lineage in one view
+CREATE OR REPLACE VIEW vw_troubleshooting_dashboard AS
+SELECT
+    r.anomesdia,
+    r.product,
+    r.domain,
+    r.status AS run_status,
+    r.source_bucket,
+    r.source_key,
+    r.source_file_name,
+    r.ingestion_id,
+    r.execution_id,
+    r.total_records,
+    r.processed_records,
+    r.rejected_records,
+    r.error_records,
+    r.failure_step,
+    r.error_message AS run_error,
+    r.started_at,
+    r.finished_at,
+    r.raw_path,
+    r.processed_path,
+    r.curated_path,
+    r.rejected_path,
+    CASE WHEN r.rejected_records > 0 THEN 1 ELSE 0 END AS has_rejections
+FROM analytics_ingestion_runs r;

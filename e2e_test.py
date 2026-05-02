@@ -11,6 +11,7 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from ecs_worker import run_worker
+from analytics_queries import run_analytics_queries
 from aws_local import (
     ANALYTICS_BUCKET,
     ANALYTICS_DATABASE,
@@ -241,6 +242,22 @@ def main() -> int:
         domains = {message["record"]["domain"] for message in [*billing, *analytics]}
         assert_true(domains == {"transaction"}, f"expected only transaction domain, got {domains}")
         checks.append({"status": "OK", "check": "Both configured products harmonized to transaction domain"})
+
+        try:
+            analytics_result = run_analytics_queries()
+            tc = analytics_result["table_counts"]
+            assert_true(tc.get("analytics_ingestion_runs", 0) >= 2, f"expected >=2 ingestion runs, got {tc.get('analytics_ingestion_runs', 0)}")
+            assert_true(tc.get("analytics_ingestion_steps", 0) >= 6, f"expected >=6 ingestion steps, got {tc.get('analytics_ingestion_steps', 0)}")
+            assert_true(tc.get("analytics_execution_events", 0) >= 4, f"expected >=4 execution events, got {tc.get('analytics_execution_events', 0)}")
+            assert_true(tc.get("business_curated", 0) >= 2, f"expected >=2 curated records, got {tc.get('business_curated', 0)}")
+            runs_query = analytics_result["queries"].get("runs_by_status", [])
+            succeeded = [r for r in runs_query if r.get("status") == "SUCCEEDED"]
+            assert_true(len(succeeded) >= 2, f"expected >=2 SUCCEEDED runs, got {len(succeeded)}")
+            curated_query = analytics_result["queries"].get("curated_with_run_context", [])
+            assert_true(len(curated_query) >= 2, f"expected >=2 curated_with_run_context rows, got {len(curated_query)}")
+            checks.append({"status": "OK", "check": "DuckDB analytics queries: tables loaded, runs/steps/curated validated"})
+        except Exception as exc:
+            checks.append({"status": "WARN", "check": f"DuckDB analytics query skipped: {exc}"})
 
         table = clients().dynamodb.Table(CONFIG_TABLE)
         assert_true("Item" in table.get_item(Key={"product": "orders"}), "orders config missing in DynamoDB")

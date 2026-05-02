@@ -147,6 +147,7 @@ sequenceDiagram
 - `local_sfn_runner.py`: le `state-machine.asl.json` e executa os jobs locais definidos no ASL.
 - `glue_landing.py`, `glue_harmonization.py`, `enrichment_batch.py`: jobs locais equivalentes aos passos Glue/batch.
 - `analytics_writer.py`: escritas compartilhadas de fatos analiticos no bucket `poc-data-ingestion-analytics`.
+- `analytics_queries.py`: simulacao local do Athena via DuckDB - carrega arquivos do S3 analytics/lake e executa queries operacionais.
 - `glue_catalog.py`: bootstrap do Glue Data Catalog (database `poc_data_ingestion_analytics` com 8 tabelas + database `poc_data_ingestion_business` com curated/raw/processed/rejected).
 - `athena_views.sql`: 10 views Athena para dashboards operacionais e analise de negocios/TI.
 - `ecs_worker.py`: script Python que representa ECS batch; consome SQS gerado por S3 notification, le S3 `curated` ou `rejected`, busca destinos no DynamoDB e publica SNS.
@@ -220,6 +221,23 @@ Evidence: runtime/reports/20260501210000-db070cc9.json
 ```
 
 Evidência completa fica em `runtime/reports/<run_id>.json`.
+
+Ao final de todas as execucoes, o runner executa queries analiticas via DuckDB simulando Athena:
+
+```text
+===== Analytics Query Results (DuckDB local simulation) =====
+
+Tables loaded: 8 of 10
+  analytics_ingestion_runs: 2 rows [OK]
+  analytics_ingestion_steps: 6 rows [OK]
+  ...
+
+--- runs_by_status (2 rows) ---
+  {'anomesdia': '20260501', 'product': 'orders', 'status': 'SUCCEEDED', ...}
+
+--- curated_with_run_context (2 rows) ---
+  {'product': 'orders', 'curated_records': '2', 'run_status': 'SUCCEEDED'}
+```
 
 Executar worker ECS local:
 

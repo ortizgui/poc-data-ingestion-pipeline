@@ -9,6 +9,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from aws_local import AWS_ENDPOINT_URL, AWS_REGION, EVENTBRIDGE_QUEUE, PipelineError
+from analytics_queries import print_analytics_report, run_analytics_queries
 from evidence import evidence_table
 from local_sfn_runner import run_state_machine
 
@@ -83,6 +84,10 @@ def print_summary(result: dict[str, Any]) -> None:
         else:
             print(f"SKIP: {item['reason']}")
         print("")
+    try:
+        print_analytics_report(run_analytics_queries())
+    except Exception as exc:
+        print(f"\nAnalytics query simulation skipped: {exc}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

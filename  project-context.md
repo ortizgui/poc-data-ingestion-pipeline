@@ -32,6 +32,7 @@ Mandatory unless user explicitly says otherwise.
 
 - Simulate AWS via MiniStack to maximum extent possible.
 - Use `boto3` against `localhost:4566` for all AWS services MiniStack supports (S3, DynamoDB, SQS, SNS, EventBridge, Step Functions, Glue, STS).
+- Simulate Athena via DuckDB: load analytics/business lake S3 files into in-memory DuckDB, run SQL queries that mirror `athena_views.sql`.
 - Only use local alternatives (scripts, file I/O) when MiniStack lacks the service or the emulation is too incomplete to be useful.
 - Document any local-only deviation clearly so real-AWS path remains obvious.
 
@@ -131,6 +132,9 @@ Registration:
   - `vw_execution_timeline`
   - `vw_curated_with_run_context` (join business curated + analytics runs)
   - `vw_rejected_with_context` (join business rejected + analytics runs)
+  - `vw_error_detail_with_source` (individual errors with source file trace)
+  - `vw_ingested_with_source` (curated records with full file lineage)
+  - `vw_troubleshooting_dashboard` (unified run status + error/rejection flags)
 - views join across both databases for business + operational context.
 
 ### QuickSight
@@ -557,6 +561,9 @@ Views already defined in `athena_views.sql`:
 - `vw_execution_timeline`
 - `vw_curated_with_run_context`
 - `vw_rejected_with_context`
+- `vw_error_detail_with_source` — individual errors + source file trace
+- `vw_ingested_with_source` — curated records + full file lineage
+- `vw_troubleshooting_dashboard` — unified run status + error/rejection flags
 
 QuickSight uses Athena datasets from these views for operational dashboards.
 
@@ -609,6 +616,7 @@ QuickSight uses Athena datasets from these views for operational dashboards.
 - `glue_harmonization.py`: harmonization step.
 - `enrichment_batch.py`: enrichment step.
 - `analytics_writer.py`: shared analytics emit rules.
+- `analytics_queries.py`: DuckDB local Athena simulation - loads S3 analytics/business files and runs operational queries.
 - `glue_catalog.py`: Glue Data Catalog DDL bootstrap (analytics + business databases/tables).
 - `athena_views.sql`: 10 Athena operational views for QuickSight dashboards.
 - `ecs_worker.py`: consumes SQS curated-files, reads S3, publishes SNS.
