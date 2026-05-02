@@ -1,0 +1,15 @@
+{
+  "domain": "transaction",
+  "domain_required_fields": [
+    "transaction_id",
+    "customer_id",
+    "amount",
+    "transaction_date"
+  ],
+  "layout_mapping": {
+    "pagamento_id": "transaction_id",
+    "cliente": "customer_id",
+    "valor": "amount",
+    "data_pagamento": "transaction_date"
+  }
+}

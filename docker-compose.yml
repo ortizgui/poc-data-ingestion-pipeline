@@ -1,0 +1,18 @@
+services:
+  ministack:
+    image: ministackorg/ministack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      PERSIST_STATE: "1"
+      S3_PERSIST: "1"
+      LOG_LEVEL: INFO
+    volumes:
+      - ./runtime/ministack/state:/tmp/ministack-state
+      - ./runtime/ministack/s3:/tmp/ministack-data/s3
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4566/_ministack/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

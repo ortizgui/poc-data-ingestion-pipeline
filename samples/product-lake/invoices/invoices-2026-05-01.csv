@@ -1,0 +1,3 @@
+invoice_id,customer_id,total,issued_at
+INV-001,C001,159.90,2026-05-01
+INV-002,C002,89.50,2026-05-01

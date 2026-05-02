@@ -1,0 +1,38 @@
+{
+  "products": {
+    "orders": {
+      "domain": "transaction",
+      "mapping_key": "de-para/orders-transaction.json",
+      "publish": {
+        "destinations": [
+          "billing-events",
+          "analytics-events"
+        ]
+      },
+      "rejection_policy": {
+        "max_error_percent": 1,
+        "max_error_count": 1000,
+        "destinations": [
+          "data-quality-events"
+        ]
+      }
+    },
+    "payments": {
+      "domain": "transaction",
+      "mapping_key": "de-para/payments-transaction.json",
+      "publish": {
+        "destinations": [
+          "billing-events",
+          "analytics-events"
+        ]
+      },
+      "rejection_policy": {
+        "max_error_percent": 1,
+        "max_error_count": 1000,
+        "destinations": [
+          "data-quality-events"
+        ]
+      }
+    }
+  }
+}

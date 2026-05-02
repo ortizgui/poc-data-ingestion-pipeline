@@ -1,0 +1,3 @@
+pedido_id,cliente_id,valor_total,data_pedido
+1001,C001,159.90,2026-05-01
+1002,C002,89.50,2026-05-01

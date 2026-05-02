@@ -1,0 +1,31 @@
+{
+  "Comment": "Local POC state machine. Resource values map to local job scripts.",
+  "StartAt": "ValidateEvent",
+  "States": {
+    "ValidateEvent": {
+      "Type": "Task",
+      "Resource": "local:validate_event",
+      "Next": "LandingGlue"
+    },
+    "LandingGlue": {
+      "Type": "Task",
+      "Resource": "local:glue_landing",
+      "Next": "HarmonizationGlue"
+    },
+    "HarmonizationGlue": {
+      "Type": "Task",
+      "Resource": "local:glue_harmonization",
+      "Next": "EnrichmentBatch"
+    },
+    "EnrichmentBatch": {
+      "Type": "Task",
+      "Resource": "local:enrichment_batch",
+      "Next": "CuratedS3Notification"
+    },
+    "CuratedS3Notification": {
+      "Type": "Task",
+      "Resource": "local:s3_notification",
+      "End": true
+    }
+  }
+}
