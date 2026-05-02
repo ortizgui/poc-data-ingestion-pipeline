@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from aws_local import (
+    ANALYTICS_BUCKET,
     DATA_BUCKET,
     DOMAIN_REQUIRED_FIELDS,
     PipelineError,
@@ -215,6 +216,7 @@ class PipelineUnitTest(unittest.TestCase):
         self.assertIn((DATA_BUCKET, processed_key), objects)
         self.assertIn((DATA_BUCKET, rejection_key), objects)
         self.assertIn("missing domain fields: amount", objects[(DATA_BUCKET, rejection_key)])
+        self.assertTrue(any(bucket == ANALYTICS_BUCKET for bucket, _key in objects))
 
     def test_harmonization_stops_before_processed_when_threshold_exceeded(self):
         mapping = {
@@ -295,6 +297,7 @@ class PipelineUnitTest(unittest.TestCase):
         self.assertIn((DATA_BUCKET, curated_key), objects)
         self.assertIn((DATA_BUCKET, rejection_key), objects)
         self.assertIn("customer not found in enrichment base", objects[(DATA_BUCKET, rejection_key)])
+        self.assertTrue(any(bucket == ANALYTICS_BUCKET for bucket, _key in objects))
 
     def test_enrichment_stops_before_curated_when_threshold_exceeded(self):
         processed_key = "processed/orders/year=2026/month=05/day=01/run-1/orders.parquet"

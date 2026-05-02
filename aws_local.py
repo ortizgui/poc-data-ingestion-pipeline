@@ -24,6 +24,7 @@ AWS_ENDPOINT_URL = os.getenv("AWS_ENDPOINT_URL", "http://localhost:4566")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 SOURCE_BUCKET = os.getenv("SOURCE_BUCKET", "product-lake")
 DATA_BUCKET = os.getenv("DATA_BUCKET", "data-lake")
+ANALYTICS_BUCKET = os.getenv("ANALYTICS_BUCKET", "poc-data-ingestion-analytics")
 CONFIG_TABLE = os.getenv("CONFIG_TABLE", "ProductConfig")
 CURATED_QUEUE = os.getenv("CURATED_QUEUE", "curated-files")
 EVENTBRIDGE_QUEUE = os.getenv("EVENTBRIDGE_QUEUE", "eventbridge-file-ready")
@@ -84,11 +85,19 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def partition_prefix(business_date: str) -> str:
+def parse_business_date(business_date: str) -> datetime:
     try:
-        date = datetime.strptime(business_date, "%Y-%m-%d")
+        return datetime.strptime(business_date, "%Y-%m-%d")
     except ValueError as exc:
         raise PipelineError("business_date must use YYYY-MM-DD") from exc
+
+
+def anomesdia_for(business_date: str) -> str:
+    return parse_business_date(business_date).strftime("%Y%m%d")
+
+
+def partition_prefix(business_date: str) -> str:
+    date = parse_business_date(business_date)
     return f"year={date.year:04d}/month={date.month:02d}/day={date.day:02d}"
 
 

@@ -11,6 +11,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 from aws_local import (
+    ANALYTICS_BUCKET,
     CONFIG_TABLE,
     CURATED_QUEUE,
     DATA_BUCKET,
@@ -143,6 +144,7 @@ def bootstrap(config_path: Path = DEFAULT_CONFIG, source_dir: Path = DEFAULT_FIL
     aws = clients()
     ensure_bucket(aws.s3, SOURCE_BUCKET)
     ensure_bucket(aws.s3, DATA_BUCKET)
+    ensure_bucket(aws.s3, ANALYTICS_BUCKET)
     configure_curated_notification(aws)
     configure_eventbridge_target(aws)
     seed_product_configs(config_path, aws)

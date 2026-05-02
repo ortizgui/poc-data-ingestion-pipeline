@@ -14,6 +14,7 @@ from ecs_worker import run_worker
 from aws_local import (
     AWS_ENDPOINT_URL,
     AWS_REGION,
+    ANALYTICS_BUCKET,
     CONFIG_TABLE,
     CURATED_QUEUE,
     DATA_BUCKET,
@@ -62,7 +63,7 @@ def cleanup_ministack() -> None:
         aws_secret_access_key="test",
     )
 
-    for bucket in [SOURCE_BUCKET, DATA_BUCKET]:
+    for bucket in [SOURCE_BUCKET, DATA_BUCKET, ANALYTICS_BUCKET]:
         try:
             response = s3.list_objects_v2(Bucket=bucket)
         except ClientError:
@@ -97,6 +98,12 @@ def cleanup_ministack() -> None:
 def list_keys(prefix: str) -> list[str]:
     s3 = aws_client("s3")
     response = s3.list_objects_v2(Bucket=DATA_BUCKET, Prefix=prefix)
+    return [item["Key"] for item in response.get("Contents", [])]
+
+
+def list_analytics_keys(prefix: str) -> list[str]:
+    s3 = aws_client("s3")
+    response = s3.list_objects_v2(Bucket=ANALYTICS_BUCKET, Prefix=prefix)
     return [item["Key"] for item in response.get("Contents", [])]
 
 
@@ -200,9 +207,11 @@ def main() -> int:
         assert_true(len(list_keys("raw/")) == 2, "expected 2 raw files")
         assert_true(len(list_keys("processed/")) == 2, "expected 2 processed files")
         assert_true(len(list_keys("curated/")) == 2, "expected 2 curated files")
+        assert_true(len(list_analytics_keys("observability/ingestion_runs/")) >= 2, "expected ingestion run analytics files")
+        assert_true(len(list_analytics_keys("observability/ingestion_steps/")) >= 6, "expected ingestion step analytics files")
         assert_true(worker_result["processed_messages"] == 2, "ECS worker should consume 2 S3 notifications")
         assert_true(all(item["step_functions_execution"] for item in processed), "Step Functions execution missing")
-        checks.append({"status": "OK", "check": "S3 raw/processed/curated and Step Functions evidence validated"})
+        checks.append({"status": "OK", "check": "S3 raw/processed/curated, analytics bucket and Step Functions evidence validated"})
 
         billing = queue_messages("billing-events", expected=4)
         analytics = queue_messages("analytics-events", expected=4)

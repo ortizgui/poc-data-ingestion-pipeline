@@ -4,6 +4,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from analytics_writer import (
+    emit_data_quality_summary,
+    emit_error_event,
+    emit_execution_event,
+    emit_file_lineage_event,
+    emit_ingestion_step,
+    emit_rejection_summary,
+    emit_schema_validation,
+)
 from aws_local import (
     DATA_BUCKET,
     DOMAIN_REQUIRED_FIELDS,
@@ -15,6 +24,7 @@ from aws_local import (
     rejection_threshold_exceeded,
     s3_read_text,
     s3_write_text,
+    utc_now,
     validate_mapping,
     write_jsonl,
 )
@@ -53,56 +63,199 @@ def rejection_record(
 
 
 def run_harmonization(raw_key: str, valid_event: dict[str, Any], aws: Any, run_id: str) -> tuple[str, int, str, str | None, int]:
+    started_at = utc_now()
     mapping_key = valid_event["product_config"]["mapping_key"]
-    depara = load_depara_mapping(valid_event["product"], mapping_key, aws)
-    rows = read_csv_text(s3_read_text(aws.s3, DATA_BUCKET, raw_key))
-    source_fields = set(rows[0].keys()) if rows else set()
-    missing_source_fields = [source for source in depara["layout_mapping"] if source not in source_fields]
-    if missing_source_fields:
-        raise PipelineError(f"file missing source columns: {', '.join(missing_source_fields)}")
-
-    policy = normalize_rejection_policy(valid_event["product"], valid_event["product_config"])
-    domain_rows = []
-    rejected_rows = []
-
-    for index, row in enumerate(rows, start=1):
-        mapped_row = {
-            domain_field: row.get(source_field, "")
-            for source_field, domain_field in depara["layout_mapping"].items()
-        }
-        domain_row = {field: mapped_row.get(field, "") for field in DOMAIN_REQUIRED_FIELDS}
-        missing = [field for field in DOMAIN_REQUIRED_FIELDS if not domain_row.get(field)]
-        if missing:
-            rejected_rows.append(
-                rejection_record(
-                    valid_event,
-                    run_id,
-                    "harmonization",
-                    index,
-                    f"missing domain fields: {', '.join(missing)}",
-                    row,
-                )
-            )
-            continue
-        domain_rows.append(domain_row)
-
-    file_stem = Path(valid_event["file_name"]).stem
-    rejection_key = None
-    if rejected_rows:
-        rejection_key = rejected_key_for(valid_event, run_id, file_stem, "harmonization")
-        s3_write_text(aws.s3, DATA_BUCKET, rejection_key, write_jsonl(rejected_rows))
-        if rejection_threshold_exceeded(len(rows), len(rejected_rows), policy):
-            message = (
-                "rejected rows exceeded threshold: "
-                f"{len(rejected_rows)}/{len(rows)} rows; "
-                f"limits {policy['max_error_percent']}% or {policy['max_error_count']} rows; "
-                f"rejected=s3://{DATA_BUCKET}/{rejection_key}"
-            )
-            raise RejectedRowsThresholdError(message, rejection_key, len(rejected_rows), len(rows))
-
     processed_key = (
         f"processed/{valid_event['product']}/{partition_prefix(valid_event['business_date'])}/"
-        f"{run_id}/{file_stem}.parquet"
+        f"{run_id}/{Path(valid_event['file_name']).stem}.parquet"
     )
-    s3_write_text(aws.s3, DATA_BUCKET, processed_key, write_jsonl(domain_rows))
-    return processed_key, len(domain_rows), mapping_key, rejection_key, len(rejected_rows)
+    try:
+        depara = load_depara_mapping(valid_event["product"], mapping_key, aws)
+        rows = read_csv_text(s3_read_text(aws.s3, DATA_BUCKET, raw_key))
+        source_fields = set(rows[0].keys()) if rows else set()
+        missing_source_fields = [source for source in depara["layout_mapping"] if source not in source_fields]
+        if missing_source_fields:
+            emit_schema_validation(
+                aws,
+                valid_event,
+                step_name="HarmonizationGlue",
+                schema_name="source_layout_mapping",
+                schema_version="v1",
+                validation_result="FAILED",
+                missing_columns=", ".join(missing_source_fields),
+                unexpected_columns="",
+                invalid_types="",
+                validation_message=f"file missing source columns: {', '.join(missing_source_fields)}",
+                validated_at=utc_now(),
+            )
+            raise PipelineError(f"file missing source columns: {', '.join(missing_source_fields)}")
+
+        policy = normalize_rejection_policy(valid_event["product"], valid_event["product_config"])
+        domain_rows = []
+        rejected_rows = []
+
+        for index, row in enumerate(rows, start=1):
+            mapped_row = {
+                domain_field: row.get(source_field, "")
+                for source_field, domain_field in depara["layout_mapping"].items()
+            }
+            domain_row = {field: mapped_row.get(field, "") for field in DOMAIN_REQUIRED_FIELDS}
+            missing = [field for field in DOMAIN_REQUIRED_FIELDS if not domain_row.get(field)]
+            if missing:
+                rejected_rows.append(
+                    rejection_record(
+                        valid_event,
+                        run_id,
+                        "harmonization",
+                        index,
+                        f"missing domain fields: {', '.join(missing)}",
+                        row,
+                    )
+                )
+                continue
+            domain_rows.append(domain_row)
+
+        file_stem = Path(valid_event["file_name"]).stem
+        rejection_key = None
+        if rejected_rows:
+            rejection_key = rejected_key_for(valid_event, run_id, file_stem, "harmonization")
+            s3_write_text(aws.s3, DATA_BUCKET, rejection_key, write_jsonl(rejected_rows))
+            emit_rejection_summary(
+                aws,
+                valid_event,
+                step_name="HarmonizationGlue",
+                rejection_reason=rejected_rows[0]["reason"],
+                rejection_category="required_field_validation",
+                rejected_count=len(rejected_rows),
+                total_step_records=len(rows),
+                rejection_percent=(len(rejected_rows) / len(rows) * 100) if rows else 0,
+                rejected_detail_path=f"s3://{DATA_BUCKET}/{rejection_key}",
+                sample_message=rejected_rows[0]["reason"],
+                occurred_at=utc_now(),
+            )
+            if rejection_threshold_exceeded(len(rows), len(rejected_rows), policy):
+                message = (
+                    "rejected rows exceeded threshold: "
+                    f"{len(rejected_rows)}/{len(rows)} rows; "
+                    f"limits {policy['max_error_percent']}% or {policy['max_error_count']} rows; "
+                    f"rejected=s3://{DATA_BUCKET}/{rejection_key}"
+                )
+                raise RejectedRowsThresholdError(message, rejection_key, len(rejected_rows), len(rows))
+
+        s3_write_text(aws.s3, DATA_BUCKET, processed_key, write_jsonl(domain_rows))
+        finished_at = utc_now()
+        emit_schema_validation(
+            aws,
+            valid_event,
+            step_name="HarmonizationGlue",
+            schema_name="source_layout_mapping",
+            schema_version="v1",
+            validation_result="SUCCEEDED",
+            missing_columns="",
+            unexpected_columns=", ".join(sorted(source_fields - set(depara["layout_mapping"].keys()))),
+            invalid_types="",
+            validation_message="source columns satisfied mapping",
+            validated_at=finished_at,
+        )
+        emit_data_quality_summary(
+            aws,
+            valid_event,
+            step_name="HarmonizationGlue",
+            rule_name="required_domain_fields",
+            rule_type="completeness",
+            rule_result="FAILED" if rejected_rows else "SUCCEEDED",
+            total_records=len(rows),
+            valid_records=len(domain_rows),
+            invalid_records=len(rejected_rows),
+            warning_records=0,
+            threshold_value=str(policy["max_error_percent"]),
+            measured_value=str((len(rejected_rows) / len(rows) * 100) if rows else 0),
+            details=f"mapping={mapping_key}",
+            measured_at=finished_at,
+        )
+        emit_ingestion_step(
+            aws,
+            valid_event,
+            step_name="HarmonizationGlue",
+            step_order=3,
+            glue_job_name="glue_harmonization",
+            glue_job_run_id=valid_event.get("execution_id", run_id),
+            status="SUCCEEDED",
+            started_at=started_at,
+            finished_at=finished_at,
+            input_records=len(rows),
+            output_records=len(domain_rows),
+            rejected_records=len(rejected_rows),
+            input_path=f"s3://{DATA_BUCKET}/{raw_key}",
+            output_path=f"s3://{DATA_BUCKET}/{processed_key}",
+        )
+        emit_file_lineage_event(
+            aws,
+            valid_event,
+            artifact_type="processed",
+            artifact_role="harmonization_output",
+            bucket=DATA_BUCKET,
+            s3_key=processed_key,
+            format="parquet",
+            record_count=len(domain_rows),
+            file_size_bytes=len(write_jsonl(domain_rows).encode("utf-8")),
+            parent_bucket=DATA_BUCKET,
+            parent_key=raw_key,
+            created_at=finished_at,
+        )
+        emit_execution_event(
+            aws,
+            valid_event,
+            step_name="HarmonizationGlue",
+            event_type="step_completed",
+            event_source="glue_harmonization",
+            event_message=f"mapped={len(domain_rows)} rejected={len(rejected_rows)}",
+            event_payload_ref=f"s3://{DATA_BUCKET}/{processed_key}",
+            event_at=finished_at,
+        )
+        return processed_key, len(domain_rows), mapping_key, rejection_key, len(rejected_rows)
+    except Exception as exc:
+        finished_at = utc_now()
+        emit_ingestion_step(
+            aws,
+            valid_event,
+            step_name="HarmonizationGlue",
+            step_order=3,
+            glue_job_name="glue_harmonization",
+            glue_job_run_id=valid_event.get("execution_id", run_id),
+            status="FAILED",
+            started_at=started_at,
+            finished_at=finished_at,
+            input_records=0,
+            output_records=0,
+            error_records=1,
+            input_path=f"s3://{DATA_BUCKET}/{raw_key}",
+            output_path=f"s3://{DATA_BUCKET}/{processed_key}",
+            error_message=str(exc),
+        )
+        emit_error_event(
+            aws,
+            valid_event,
+            step_name="HarmonizationGlue",
+            error_type=exc.__class__.__name__,
+            error_code="harmonization_failed",
+            error_message=str(exc),
+            error_category="pipeline",
+            glue_job_name="glue_harmonization",
+            glue_job_run_id=valid_event.get("execution_id", run_id),
+            source_bucket=DATA_BUCKET,
+            source_key=raw_key,
+            payload_ref=f"s3://{DATA_BUCKET}/{raw_key}",
+            occurred_at=finished_at,
+        )
+        emit_execution_event(
+            aws,
+            valid_event,
+            step_name="HarmonizationGlue",
+            event_type="step_failed",
+            event_source="glue_harmonization",
+            event_message=str(exc),
+            event_payload_ref=f"s3://{DATA_BUCKET}/{raw_key}",
+            event_at=finished_at,
+        )
+        raise

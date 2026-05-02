@@ -4,7 +4,7 @@ POC local de pipeline generica para ingestao de dados, seguindo ` project-contex
 
 ## Ideia
 
-Produtos gravam arquivos no lake deles, em S3. Quando um arquivo fica pronto, o produto publica um evento no EventBus. Esse evento inicia a Step Functions na nossa conta AWS. A pipeline copia o arquivo para `raw`, harmoniza para o dominio padrao `transaction`, salva em `processed`, enriquece para `curated` e publica eventos para consumidores via SNS. Registros invalidos ficam em `rejected` conforme threshold por produto e tambem seguem pelo fluxo S3 -> SQS -> ECS -> SNS.
+Produtos gravam arquivos no lake deles, em S3. Quando um arquivo fica pronto, o produto publica um evento no EventBus. Esse evento inicia a Step Functions na nossa conta AWS. A pipeline copia o arquivo para `raw`, harmoniza para o dominio padrao `transaction`, salva em `processed`, enriquece para `curated` e publica eventos para consumidores via SNS. Registros invalidos ficam em `rejected` conforme threshold por produto e tambem seguem pelo fluxo S3 -> SQS -> ECS -> SNS. Em paralelo, cada execucao gera fatos analiticos no bucket `poc-data-ingestion-analytics` para observabilidade e auditoria.
 
 Objetivo da POC:
 
@@ -47,6 +47,10 @@ flowchart LR
     FileFailed --> CuratedQueue
     CuratedQueue --> Publish[Step: PublishEvents<br/>ECS Worker]
     Publish --> SNS[SNS<br/>domain/data-quality events]
+    SFN --> Analytics[S3 analytics<br/>observability/quality/audit]
+    Analytics --> Catalog[Glue Data Catalog]
+    Catalog --> Athena[Athena]
+    Athena --> QuickSight[QuickSight]
     SNS --> DestQueues[SQS destino]
 ```
 
@@ -216,7 +220,7 @@ Resultado esperado do E2E:
 
 ## Recursos MiniStack
 
-- S3 buckets: `product-lake`, `data-lake`.
+- S3 buckets: `product-lake`, `data-lake`, `poc-data-ingestion-analytics`.
 - De-para JSON: `s3://data-lake/de-para/*.json`.
 - DynamoDB table: `ProductConfig`.
 - EventBridge bus: `ingestion-events`.
