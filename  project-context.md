@@ -550,6 +550,8 @@ QuickSight should use Athena datasets for operational dashboards.
 - `glue_harmonization.py`: harmonization step.
 - `enrichment_batch.py`: enrichment step.
 - `analytics_writer.py`: shared analytics emit rules.
+- `glue_catalog.py`: Glue Data Catalog DDL bootstrap (analytics + business databases/tables).
+- `athena_views.sql`: Athena operational views for QuickSight dashboards.
 - `evidence.py`: local evidence output.
 
 ## Success
@@ -565,8 +567,6 @@ Success means:
 
 ## Next Steps
 
-1. add Glue Catalog DDL.
-2. add Athena views.
-3. move local pseudo-Parquet to real Parquet.
-4. validate file sizing and compaction.
-5. decide whether file keeps leading-space name or gets renamed.
+1. move local pseudo-Parquet to real Parquet.
+2. validate file sizing and compaction.
+3. decide whether file keeps leading-space name or gets renamed.

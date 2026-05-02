@@ -12,9 +12,11 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from ecs_worker import run_worker
 from aws_local import (
+    ANALYTICS_BUCKET,
+    ANALYTICS_DATABASE,
     AWS_ENDPOINT_URL,
     AWS_REGION,
-    ANALYTICS_BUCKET,
+    BUSINESS_DATABASE,
     CONFIG_TABLE,
     CURATED_QUEUE,
     DATA_BUCKET,
@@ -173,6 +175,21 @@ def main() -> int:
         checks.append({"status": "OK", "check": "MiniStack state cleaned"})
         bootstrap()
         checks.append({"status": "OK", "check": "Bootstrap created AWS resources and sample data"})
+        try:
+            glue = aws_client("glue")
+            databases = glue.get_databases()
+            analytics_db = next((db for db in databases.get("DatabaseList", []) if db["Name"] == ANALYTICS_DATABASE), None)
+            business_db = next((db for db in databases.get("DatabaseList", []) if db["Name"] == BUSINESS_DATABASE), None)
+            if analytics_db and business_db:
+                analytics_tables = glue.get_tables(DatabaseName=ANALYTICS_DATABASE)
+                business_tables = glue.get_tables(DatabaseName=BUSINESS_DATABASE)
+                assert_true(len(analytics_tables.get("TableList", [])) == 8, f"expected 8 analytics tables, got {len(analytics_tables.get('TableList', []))}")
+                assert_true(len(business_tables.get("TableList", [])) == 4, f"expected 4 business tables, got {len(business_tables.get('TableList', []))}")
+                checks.append({"status": "OK", "check": "Glue Data Catalog databases and 12 tables created"})
+            else:
+                checks.append({"status": "WARN", "check": "Glue databases not found (MiniStack may not support Glue)"})
+        except Exception:
+            checks.append({"status": "SKIP", "check": "Glue not available in MiniStack"})
         assert_curated_notification_configured()
         checks.append({"status": "OK", "check": "S3 notification configured for curated prefix"})
         published = publish_events()

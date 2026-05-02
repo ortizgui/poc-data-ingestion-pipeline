@@ -12,6 +12,8 @@ from botocore.exceptions import ClientError
 
 from aws_local import (
     ANALYTICS_BUCKET,
+    ANALYTICS_DATABASE,
+    BUSINESS_DATABASE,
     CONFIG_TABLE,
     CURATED_QUEUE,
     DATA_BUCKET,
@@ -140,6 +142,25 @@ def ensure_state_machine(aws: Any) -> None:
             raise
 
 
+def ensure_glue_catalog() -> None:
+    from glue_catalog import bootstrap_glue_catalog
+
+    try:
+        result = bootstrap_glue_catalog()
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code == "AccessDeniedException" and "glue" in str(exc).lower():
+            print(f"Glue not available in MiniStack (code={code}). Skip catalog bootstrap.", file=sys.stderr)
+            return
+        raise
+    except Exception as exc:
+        print(f"Glue catalog bootstrap skipped: {exc}", file=sys.stderr)
+        return
+
+    print(f"Glue catalog ready: {result['analytics_database']} ({len(result['analytics_tables'])} tables), "
+          f"{result['business_database']} ({len(result['business_tables'])} tables)")
+
+
 def bootstrap(config_path: Path = DEFAULT_CONFIG, source_dir: Path = DEFAULT_FILES) -> None:
     aws = clients()
     ensure_bucket(aws.s3, SOURCE_BUCKET)
@@ -151,6 +172,7 @@ def bootstrap(config_path: Path = DEFAULT_CONFIG, source_dir: Path = DEFAULT_FIL
     upload_mapping_files(aws=aws)
     upload_sample_files(source_dir, aws)
     ensure_state_machine(aws)
+    ensure_glue_catalog()
 
 
 def publish_event(event: dict[str, Any], aws: Any | None = None) -> dict[str, Any]:

@@ -27,11 +27,13 @@ flowchart LR
     ProductS3[S3 Produto Lake<br/>arquivo pronto] --> ProductEvent[EventBridge<br/>file-ready event]
     ProductEvent --> SFN[Step Functions<br/>local-ingestion-state-machine]
 
-    SFN --> Validate[Step: ValidateEvent<br/>DynamoDB ProductConfig]
+    SFN --> Init[Step: InitExecution<br/>ids/anomesdia]
+    Init --> Validate[Step: ValidateEvent<br/>DynamoDB ProductConfig]
     Validate --> Landing[Step: LandingGlue<br/>Glue Job]
     Landing --> Raw[S3 data-lake/raw]
 
     Raw --> Harmonization[Step: HarmonizationGlue<br/>Glue Job]
+    Harmonization --> Mapping[S3 data-lake/de-para]
     Harmonization --> Processed[S3 data-lake/processed]
 
     Processed --> Enrichment[Step: EnrichmentBatch<br/>Batch/ECS task]
@@ -47,7 +49,11 @@ flowchart LR
     FileFailed --> CuratedQueue
     CuratedQueue --> Publish[Step: PublishEvents<br/>ECS Worker]
     Publish --> SNS[SNS<br/>domain/data-quality events]
-    SFN --> Analytics[S3 analytics<br/>observability/quality/audit]
+    Init --> Analytics[S3 analytics<br/>observability/quality/audit]
+    Landing --> Analytics
+    Harmonization --> Analytics
+    Enrichment --> Analytics
+    SFN --> Analytics
     Analytics --> Catalog[Glue Data Catalog]
     Catalog --> Athena[Athena]
     Athena --> QuickSight[QuickSight]
@@ -64,6 +70,7 @@ sequenceDiagram
     participant EB as EventBridge ingestion-events
     participant SFN as Step Functions local-ingestion-state-machine
     participant DDB as DynamoDB ProductConfig
+    participant Mapping as S3 data-lake/de-para
     participant Raw as S3 data-lake/raw
     participant Processed as S3 data-lake/processed
     participant Curated as S3 data-lake/curated
@@ -71,33 +78,54 @@ sequenceDiagram
     participant CQ as SQS curated-files
     participant ECS as ECS PublishEvents worker
     participant SNS as SNS
+    participant Analytics as S3 analytics bucket
+    participant Catalog as Glue Data Catalog
+    participant Athena as Athena
+    participant QuickSight as QuickSight
 
     Product->>ProductLake: grava arquivo no lake do produto
     ProductLake-->>EB: publica file-ready event
     EB->>SFN: inicia execucao
+    SFN->>Analytics: InitExecution grava analytics_execution_events ingestion_started
     SFN->>DDB: Step ValidateEvent busca config produto
     SFN->>ProductLake: Step LandingGlue le arquivo origem
     SFN->>Raw: Step LandingGlue grava arquivo raw
-    SFN->>DDB: Step HarmonizationGlue identifica mapping do produto
-    alt contrato quebrado ou threshold excedido na harmonizacao
-        SFN->>Rejected: grava rejected/file-failed ou rejected/harmonization
+    SFN->>Analytics: LandingGlue grava ingestion_steps, file_lineage e execution_events
+    SFN->>Mapping: Step HarmonizationGlue le JSON de-para do produto
+    alt contrato quebrado na harmonizacao
+        SFN->>Analytics: grava schema_validation FAILED, ingestion_errors, ingestion_steps FAILED e execution_events
+        SFN->>Rejected: grava rejected/file-failed
+        SFN->>Analytics: grava ingestion_run FAILED
+        Rejected-->>CQ: S3 ObjectCreated rejected/*.jsonl
+        SFN->>CQ: publica ingestion.file-failed
+    else threshold excedido na harmonizacao
+        SFN->>Rejected: grava rejected/harmonization/*.jsonl
+        SFN->>Analytics: grava rejections_summary, ingestion_errors, ingestion_steps FAILED, execution_events e ingestion_run FAILED
+        Rejected-->>CQ: S3 ObjectCreated rejected/*.jsonl
         SFN->>CQ: publica ingestion.file-failed
     else harmonizacao dentro do threshold
-        SFN->>Processed: Step HarmonizationGlue grava dominio transaction
         opt linhas invalidas na harmonizacao
             SFN->>Rejected: grava rejected/harmonization/*.jsonl
+            SFN->>Analytics: grava rejections_summary da harmonizacao
             Rejected-->>CQ: S3 ObjectCreated rejected/*.jsonl
         end
+        SFN->>Processed: Step HarmonizationGlue grava dominio transaction
+        SFN->>Analytics: HarmonizationGlue grava schema_validation, quality, step, lineage e event
         alt threshold excedido no enriquecimento
             SFN->>Rejected: grava rejected/enrichment/*.jsonl
+            SFN->>Analytics: grava rejections_summary/error/step/event e ingestion_run FAILED
+            Rejected-->>CQ: S3 ObjectCreated rejected/*.jsonl
             SFN->>CQ: publica ingestion.file-failed
         else enriquecimento dentro do threshold
             opt linhas invalidas no enriquecimento
                 SFN->>Rejected: grava rejected/enrichment/*.jsonl
+                SFN->>Analytics: grava rejections_summary do enriquecimento
                 Rejected-->>CQ: S3 ObjectCreated rejected/*.jsonl
             end
             SFN->>Curated: Step EnrichmentBatch grava arquivo curated
+            SFN->>Analytics: EnrichmentBatch grava quality, step, lineage e event
             Curated-->>CQ: S3 ObjectCreated curated/*.parquet
+            SFN->>Analytics: FinalizeExecution grava ingestion_runs e execution_events
         end
     end
     ECS->>CQ: receive S3 notification
@@ -105,6 +133,10 @@ sequenceDiagram
     ECS->>Rejected: Step PublishEvents le arquivo rejected quando ingestion.records-rejected
     ECS->>DDB: Step PublishEvents busca destinos do produto
     ECS->>SNS: publica domain_record_ready, ingestion.records-rejected ou ingestion.file-failed
+    Note over Analytics,QuickSight: Camada de consulta: Glue Data Catalog - Athena - QuickSight
+    Analytics-->>Catalog: tabelas/particoes apontam para prefixes analytics
+    Catalog-->>Athena: consultas por anomesdia
+    Athena-->>QuickSight: datasets de observabilidade
 ```
 
 ## Arquitetura local
@@ -114,6 +146,9 @@ sequenceDiagram
 - `local_eventbridge_runner.py`: consome fila target do EventBridge e inicia execucao local da Step Functions.
 - `local_sfn_runner.py`: le `state-machine.asl.json` e executa os jobs locais definidos no ASL.
 - `glue_landing.py`, `glue_harmonization.py`, `enrichment_batch.py`: jobs locais equivalentes aos passos Glue/batch.
+- `analytics_writer.py`: escritas compartilhadas de fatos analiticos no bucket `poc-data-ingestion-analytics`.
+- `glue_catalog.py`: bootstrap do Glue Data Catalog (database `poc_data_ingestion_analytics` com 8 tabelas + database `poc_data_ingestion_business` com curated/raw/processed/rejected).
+- `athena_views.sql`: 10 views Athena para dashboards operacionais e analise de negocios/TI.
 - `ecs_worker.py`: script Python que representa ECS batch; consome SQS gerado por S3 notification, le S3 `curated` ou `rejected`, busca destinos no DynamoDB e publica SNS.
 - `e2e_test.py`: teste ponta a ponta local contra MiniStack.
 - `config/products.json`: seed de DynamoDB com produto, dominio, destinos e `mapping_key`.
@@ -231,6 +266,31 @@ Resultado esperado do E2E:
 - S3 notification: `data-lake` prefix `rejected/` suffix `.jsonl` -> SQS `curated-files`.
 - SQS: `curated-files`, filas destino criadas pelo worker.
 - SNS: topicos destino criados pelo worker, incluindo destinos de dominio e qualidade.
+- Glue Data Catalog: databases `poc_data_ingestion_analytics` (8 tabelas de observabilidade) e `poc_data_ingestion_business` (curated, raw, processed, rejected).
+- Athena: views operacionais definidas em `athena_views.sql` com joins entre analytics e business lake.
+
+## Consultas Analytics (Glue + Athena)
+
+`glue_catalog.py` registra todas as tabelas no Glue Data Catalog durante o bootstrap. Em AWS real:
+
+```bash
+# Executar views Athena (requer Athena ativo na conta)
+aws athena start-query-execution \
+    --query-execution-context Database=poc_data_ingestion_analytics \
+    --query-string "$(cat athena_views.sql | tr '\n' ' ')"
+
+# Consultar status de execucao por dia
+aws athena start-query-execution \
+    --query-execution-context Database=poc_data_ingestion_analytics \
+    --query-string "SELECT * FROM vw_ingestion_status_by_day WHERE anomesdia = '20260502';" \
+    --result-configuration OutputLocation=s3://poc-data-ingestion-analytics/athena-results/
+```
+
+**Para negocio**: `vw_curated_with_run_context` junta dados enriquecidos com status da execucao. `vw_rejected_with_context` mostra registros rejeitados com motivo e contexto da run.
+
+**Para TI**: `vw_ingestion_errors_by_product`, `vw_ingestion_duration_by_step`, `vw_schema_validation_by_product` para diagnostico de falhas e performance.
+
+**Para QuickSight**: datasets apontam para as views Athena, dashboards de observabilidade e qualidade.
 
 ## Mapeamento por Produto
 

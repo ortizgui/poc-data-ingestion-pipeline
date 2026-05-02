@@ -20,6 +20,20 @@ from aws_local import (
 from evidence import Evidence, evidence_table
 from ecs_worker import process_message
 from enrichment_batch import run_enrichment
+from glue_catalog import (
+    ANALYTICS_TABLES,
+    BUSINESS_TABLES,
+    ANALYTICS_INGESTION_RUNS_COLUMNS,
+    ANALYTICS_INGESTION_STEPS_COLUMNS,
+    ANALYTICS_INGESTION_ERRORS_COLUMNS,
+    ANALYTICS_REJECTIONS_SUMMARY_COLUMNS,
+    ANALYTICS_DATA_QUALITY_COLUMNS,
+    ANALYTICS_SCHEMA_VALIDATION_COLUMNS,
+    ANALYTICS_FILE_LINEAGE_COLUMNS,
+    ANALYTICS_EXECUTION_EVENTS_COLUMNS,
+    BUSINESS_CURATED_COLUMNS,
+    BUSINESS_REJECTED_COLUMNS,
+)
 from glue_harmonization import run_harmonization
 from local_sfn_runner import validate_event
 
@@ -376,6 +390,57 @@ class PipelineUnitTest(unittest.TestCase):
         self.assertEqual(published, ["data-quality-events"])
         self.assertEqual(sns.messages[0]["event_type"], "ingestion.records-rejected")
         self.assertEqual(sns.messages[0]["rejected_record"]["reason"], "missing domain fields: amount")
+
+    def test_glue_catalog_analytics_tables_are_registered(self):
+        calls = []
+
+        class FakeGlue:
+            def create_database(self, DatabaseInput):
+                calls.append(("create_database", DatabaseInput))
+            def create_table(self, DatabaseName, TableInput):
+                calls.append(("create_table", DatabaseName, TableInput["Name"]))
+
+        with patch("glue_catalog._glue_client", return_value=FakeGlue()):
+            from glue_catalog import bootstrap_glue_catalog
+            result = bootstrap_glue_catalog()
+
+        self.assertEqual(len(result["analytics_tables"]), 8)
+        self.assertEqual(len(result["business_tables"]), 4)
+        database_calls = [c for c in calls if c[0] == "create_database"]
+        table_calls = [c for c in calls if c[0] == "create_table"]
+        self.assertEqual(len(database_calls), 2)
+        self.assertEqual(len(table_calls), 12)
+
+    def test_glue_catalog_analytics_column_counts_match_spec(self):
+        self.assertEqual(len(ANALYTICS_INGESTION_RUNS_COLUMNS), 24)
+        self.assertEqual(len(ANALYTICS_INGESTION_STEPS_COLUMNS), 21)
+        self.assertEqual(len(ANALYTICS_INGESTION_ERRORS_COLUMNS), 17)
+        self.assertEqual(len(ANALYTICS_REJECTIONS_SUMMARY_COLUMNS), 14)
+        self.assertEqual(len(ANALYTICS_DATA_QUALITY_COLUMNS), 17)
+        self.assertEqual(len(ANALYTICS_SCHEMA_VALIDATION_COLUMNS), 14)
+        self.assertEqual(len(ANALYTICS_FILE_LINEAGE_COLUMNS), 15)
+        self.assertEqual(len(ANALYTICS_EXECUTION_EVENTS_COLUMNS), 11)
+
+    def test_glue_catalog_business_column_counts(self):
+        self.assertEqual(len(BUSINESS_CURATED_COLUMNS), 8)
+        self.assertEqual(len(BUSINESS_REJECTED_COLUMNS), 8)
+
+    def test_glue_catalog_all_tables_have_anomesdia_partition(self):
+        from glue_catalog import ANALYTICS_PARTITION
+        self.assertEqual(ANALYTICS_PARTITION, [("anomesdia", "string")])
+
+    def test_glue_catalog_tables_have_required_columns(self):
+        run_columns = [name for name, _ in ANALYTICS_INGESTION_RUNS_COLUMNS]
+        for col in ["ingestion_id", "execution_id", "product", "status"]:
+            self.assertIn(col, run_columns, f"{col} missing from analytics_ingestion_runs")
+
+        curated_columns = [name for name, _ in BUSINESS_CURATED_COLUMNS]
+        for col in ["transaction_id", "customer_id", "amount", "product", "business_date"]:
+            self.assertIn(col, curated_columns, f"{col} missing from business_curated")
+
+        rejected_columns = [name for name, _ in BUSINESS_REJECTED_COLUMNS]
+        for col in ["run_id", "stage", "product", "reason", "row_number"]:
+            self.assertIn(col, rejected_columns, f"{col} missing from business_rejected")
 
 
 if __name__ == "__main__":
