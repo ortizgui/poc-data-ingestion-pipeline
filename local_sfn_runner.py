@@ -50,15 +50,6 @@ def validate_event(event: dict[str, Any], aws: Any) -> dict[str, Any]:
     return {**event, "domain": product_config["domain"], "product_config": product_config}
 
 
-def start_step_function_execution(event: dict[str, Any], aws: Any) -> str | None:
-    machines = aws.sfn.list_state_machines().get("stateMachines", [])
-    machine = next((item for item in machines if item["name"] == "local-ingestion-state-machine"), None)
-    if not machine:
-        return None
-    response = aws.sfn.start_execution(stateMachineArn=machine["stateMachineArn"], input=json.dumps(event))
-    return response.get("executionArn")
-
-
 def execution_context(event: dict[str, Any], run_id: str, execution_id: str) -> dict[str, Any]:
     ingestion_id = event.get("ingestion_id") or run_id
     anomesdia = event.get("anomesdia") or anomesdia_for(event["business_date"])
@@ -302,14 +293,11 @@ def run_state_machine(event: dict[str, Any], asl_path: Path = ASL_PATH, aws: Any
     state = {"event": event, "run_id": run_id, "started_at": utc_now()}
     current_state_name = "StepFunctions"
     execution_arn = None
+    execution_id = run_id
+    state["execution_arn"] = execution_arn
+    state["execution_id"] = execution_id
 
     try:
-        execution_arn = start_step_function_execution(event, aws)
-        execution_id = execution_arn or run_id
-        evidence.ok("StepFunctions", "ASL execution started by local runner", execution_arn)
-        state["execution_arn"] = execution_arn
-        state["execution_id"] = execution_id
-
         definition = load_json(asl_path)
         current_state_name = definition["StartAt"]
         states = definition["States"]

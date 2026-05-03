@@ -7,34 +7,13 @@ import sys
 from typing import Any
 from urllib.parse import unquote_plus
 
-import boto3
 from botocore.exceptions import ClientError
 
-from aws_local import AWS_ENDPOINT_URL, AWS_REGION, CONFIG_TABLE, CURATED_QUEUE, normalize_rejection_policy
-
-
-def aws_client(service: str) -> Any:
-    return boto3.client(
-        service,
-        endpoint_url=AWS_ENDPOINT_URL,
-        region_name=AWS_REGION,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-    )
+from aws_local import CONFIG_TABLE, CURATED_QUEUE, normalize_rejection_policy, service_client, service_resource
 
 
 def get_queue_url(sqs: Any, queue_name: str) -> str:
     return sqs.create_queue(QueueName=queue_name)["QueueUrl"]
-
-
-def dynamodb_resource() -> Any:
-    return boto3.resource(
-        "dynamodb",
-        endpoint_url=AWS_ENDPOINT_URL,
-        region_name=AWS_REGION,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-    )
 
 
 def ensure_topic_and_destination_queue(sns: Any, sqs: Any, destination: str) -> tuple[str, str]:
@@ -71,7 +50,7 @@ def run_id_from_file_key(key: str) -> str:
 
 
 def product_config(product: str) -> dict[str, Any]:
-    response = dynamodb_resource().Table(CONFIG_TABLE).get_item(Key={"product": product})
+    response = service_resource("dynamodb").Table(CONFIG_TABLE).get_item(Key={"product": product})
     if "Item" not in response:
         raise ValueError(f"product not configured in DynamoDB: {product}")
     return response["Item"]
@@ -184,9 +163,9 @@ def process_message(message: dict[str, Any], sns: Any, sqs: Any, s3: Any) -> lis
 
 
 def run_worker(queue_name: str = CURATED_QUEUE, max_messages: int = 10) -> dict[str, Any]:
-    sqs = aws_client("sqs")
-    sns = aws_client("sns")
-    s3 = aws_client("s3")
+    sqs = service_client("sqs")
+    sns = service_client("sns")
+    s3 = service_client("s3")
     queue_url = get_queue_url(sqs, queue_name)
     processed = 0
     received = 0

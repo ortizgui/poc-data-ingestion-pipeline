@@ -8,21 +8,10 @@ from botocore.exceptions import ClientError
 from aws_local import (
     ANALYTICS_BUCKET,
     ANALYTICS_DATABASE,
-    AWS_ENDPOINT_URL,
-    AWS_REGION,
     BUSINESS_DATABASE,
     DATA_BUCKET,
+    service_client,
 )
-
-
-def _glue_client() -> Any:
-    return boto3.client(
-        "glue",
-        endpoint_url=AWS_ENDPOINT_URL,
-        region_name=AWS_REGION,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-    )
 
 
 def _columns(columns: list[tuple[str, str]]) -> list[dict[str, str]]:
@@ -222,7 +211,7 @@ BUSINESS_TABLES: list[tuple[str, str, list[tuple[str, str]]]] = [
 
 
 def bootstrap_glue_catalog() -> dict[str, Any]:
-    glue = _glue_client()
+    glue = service_client("glue")
 
     _create_database(glue, ANALYTICS_DATABASE, "POC Data Ingestion operational analytics")
     _create_database(glue, BUSINESS_DATABASE, "POC Data Ingestion business data lake")

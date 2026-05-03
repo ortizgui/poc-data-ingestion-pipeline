@@ -11,39 +11,14 @@ from aws_local import (
     RejectedRowsThresholdError,
     normalize_rejection_policy,
     partition_prefix,
+    rejected_key_for,
+    rejection_record,
     rejection_threshold_exceeded,
     s3_read_text,
     s3_write_text,
     utc_now,
     write_jsonl,
 )
-
-
-def rejected_key_for(valid_event: dict[str, Any], run_id: str, file_stem: str, stage: str) -> str:
-    return (
-        f"rejected/{stage}/{valid_event['product']}/{partition_prefix(valid_event['business_date'])}/"
-        f"{run_id}/{file_stem}.jsonl"
-    )
-
-
-def rejection_record(
-    valid_event: dict[str, Any],
-    run_id: str,
-    stage: str,
-    row_number: int,
-    reason: str,
-    row: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "run_id": run_id,
-        "stage": stage,
-        "product": valid_event["product"],
-        "business_date": valid_event["business_date"],
-        "file_name": valid_event["file_name"],
-        "row_number": row_number,
-        "reason": reason,
-        "raw_row": row,
-    }
 
 
 def enrich_row(row: dict[str, Any], valid_event: dict[str, Any]) -> dict[str, Any]:

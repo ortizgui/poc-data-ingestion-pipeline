@@ -394,7 +394,7 @@ class PipelineUnitTest(unittest.TestCase):
             def create_table(self, DatabaseName, TableInput):
                 calls.append(("create_table", DatabaseName, TableInput["Name"]))
 
-        with patch("glue_catalog._glue_client", return_value=FakeGlue()):
+        with patch("glue_catalog.service_client", return_value=FakeGlue()):
             from glue_catalog import bootstrap_glue_catalog
             result = bootstrap_glue_catalog()
 

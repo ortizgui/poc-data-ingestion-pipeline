@@ -5,23 +5,12 @@ import json
 import sys
 from typing import Any
 
-import boto3
 from botocore.exceptions import ClientError
 
-from aws_local import AWS_ENDPOINT_URL, AWS_REGION, EVENTBRIDGE_QUEUE, PipelineError
+from aws_local import EVENTBRIDGE_QUEUE, PipelineError, service_client
 from analytics_queries import print_analytics_report, run_analytics_queries
 from evidence import evidence_table
 from local_sfn_runner import run_state_machine
-
-
-def aws_client(service: str) -> Any:
-    return boto3.client(
-        service,
-        endpoint_url=AWS_ENDPOINT_URL,
-        region_name=AWS_REGION,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-    )
 
 
 def queue_url(sqs: Any, queue_name: str) -> str:
@@ -41,7 +30,7 @@ def event_detail(body: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def run_eventbridge_runner(queue_name: str = EVENTBRIDGE_QUEUE, max_messages: int = 10) -> dict[str, Any]:
-    sqs = aws_client("sqs")
+    sqs = service_client("sqs")
     queue = queue_url(sqs, queue_name)
     processed = []
     skipped = []

@@ -208,3 +208,50 @@ def validate_mapping(product: str, mapping_config: dict[str, Any]) -> dict[str, 
         raise PipelineError(f"mapping for {product} missing domain fields: {', '.join(missing)}")
 
     return {"domain": DOMAIN_NAME, "layout_mapping": layout_mapping, "domain_required_fields": list(DOMAIN_REQUIRED_FIELDS)}
+
+
+def rejected_key_for(valid_event: dict[str, Any], run_id: str, file_stem: str, stage: str) -> str:
+    return (
+        f"rejected/{stage}/{valid_event['product']}/{partition_prefix(valid_event['business_date'])}/"
+        f"{run_id}/{file_stem}.jsonl"
+    )
+
+
+def rejection_record(
+    valid_event: dict[str, Any],
+    run_id: str,
+    stage: str,
+    row_number: int,
+    reason: str,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "stage": stage,
+        "product": valid_event["product"],
+        "business_date": valid_event["business_date"],
+        "file_name": valid_event["file_name"],
+        "row_number": row_number,
+        "reason": reason,
+        "raw_row": row,
+    }
+
+
+def service_client(service: str) -> Any:
+    return boto3.client(
+        service,
+        endpoint_url=AWS_ENDPOINT_URL,
+        region_name=AWS_REGION,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+
+
+def service_resource(service: str) -> Any:
+    return boto3.resource(
+        service,
+        endpoint_url=AWS_ENDPOINT_URL,
+        region_name=AWS_REGION,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )

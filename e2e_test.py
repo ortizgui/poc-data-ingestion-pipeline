@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from ecs_worker import run_worker
@@ -16,7 +15,6 @@ from aws_local import (
     ANALYTICS_BUCKET,
     ANALYTICS_DATABASE,
     AWS_ENDPOINT_URL,
-    AWS_REGION,
     BUSINESS_DATABASE,
     CONFIG_TABLE,
     CURATED_QUEUE,
@@ -24,6 +22,8 @@ from aws_local import (
     EVENTBRIDGE_QUEUE,
     SOURCE_BUCKET,
     clients,
+    service_client,
+    service_resource,
 )
 from local_eventbridge_runner import run_eventbridge_runner
 from pipeline import bootstrap, publish_events
@@ -32,18 +32,8 @@ from pipeline import bootstrap, publish_events
 REPORTS_DIR = Path("runtime/reports")
 
 
-def aws_client(service: str) -> Any:
-    return boto3.client(
-        service,
-        endpoint_url=AWS_ENDPOINT_URL,
-        region_name=AWS_REGION,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-    )
-
-
 def wait_for_ministack(timeout_seconds: int = 30) -> None:
-    s3 = aws_client("s3")
+    s3 = service_client("s3")
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
@@ -55,16 +45,10 @@ def wait_for_ministack(timeout_seconds: int = 30) -> None:
 
 
 def cleanup_ministack() -> None:
-    s3 = aws_client("s3")
-    sqs = aws_client("sqs")
-    sns = aws_client("sns")
-    dynamodb = boto3.resource(
-        "dynamodb",
-        endpoint_url=AWS_ENDPOINT_URL,
-        region_name=AWS_REGION,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-    )
+    s3 = service_client("s3")
+    sqs = service_client("sqs")
+    sns = service_client("sns")
+    dynamodb = service_resource("dynamodb")
 
     for bucket in [SOURCE_BUCKET, DATA_BUCKET, ANALYTICS_BUCKET]:
         try:
@@ -99,19 +83,19 @@ def cleanup_ministack() -> None:
 
 
 def list_keys(prefix: str) -> list[str]:
-    s3 = aws_client("s3")
+    s3 = service_client("s3")
     response = s3.list_objects_v2(Bucket=DATA_BUCKET, Prefix=prefix)
     return [item["Key"] for item in response.get("Contents", [])]
 
 
 def list_analytics_keys(prefix: str) -> list[str]:
-    s3 = aws_client("s3")
+    s3 = service_client("s3")
     response = s3.list_objects_v2(Bucket=ANALYTICS_BUCKET, Prefix=prefix)
     return [item["Key"] for item in response.get("Contents", [])]
 
 
 def assert_curated_notification_configured() -> None:
-    s3 = aws_client("s3")
+    s3 = service_client("s3")
     config = s3.get_bucket_notification_configuration(Bucket=DATA_BUCKET)
     queue_configs = config.get("QueueConfigurations", [])
     curated_configs = [
@@ -129,7 +113,7 @@ def assert_curated_notification_configured() -> None:
 
 
 def queue_messages(queue_name: str, expected: int) -> list[dict[str, Any]]:
-    sqs = aws_client("sqs")
+    sqs = service_client("sqs")
     queue_url = sqs.create_queue(QueueName=queue_name)["QueueUrl"]
     messages = []
     deadline = time.time() + 10
@@ -177,7 +161,7 @@ def main() -> int:
         bootstrap()
         checks.append({"status": "OK", "check": "Bootstrap created AWS resources and sample data"})
         try:
-            glue = aws_client("glue")
+            glue = service_client("glue")
             databases = glue.get_databases()
             analytics_db = next((db for db in databases.get("DatabaseList", []) if db["Name"] == ANALYTICS_DATABASE), None)
             business_db = next((db for db in databases.get("DatabaseList", []) if db["Name"] == BUSINESS_DATABASE), None)
@@ -228,8 +212,7 @@ def main() -> int:
         assert_true(len(list_analytics_keys("observability/ingestion_runs/")) >= 2, "expected ingestion run analytics files")
         assert_true(len(list_analytics_keys("observability/ingestion_steps/")) >= 6, "expected ingestion step analytics files")
         assert_true(worker_result["processed_messages"] == 2, "ECS worker should consume 2 S3 notifications")
-        assert_true(all(item["step_functions_execution"] for item in processed), "Step Functions execution missing")
-        checks.append({"status": "OK", "check": "S3 raw/processed/curated, analytics bucket and Step Functions evidence validated"})
+        checks.append({"status": "OK", "check": "S3 raw/processed/curated, analytics bucket and pipeline evidence validated"})
 
         billing = queue_messages("billing-events", expected=4)
         analytics = queue_messages("analytics-events", expected=4)

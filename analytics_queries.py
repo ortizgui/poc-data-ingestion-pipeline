@@ -5,10 +5,9 @@ import os
 import tempfile
 from typing import Any
 
-import boto3
 import duckdb
 
-from aws_local import ANALYTICS_BUCKET, AWS_ENDPOINT_URL, AWS_REGION, DATA_BUCKET
+from aws_local import ANALYTICS_BUCKET, DATA_BUCKET, service_client
 
 
 ANALYTICS_PREFIXES = {
@@ -22,18 +21,8 @@ BUSINESS_PREFIXES = {
 }
 
 
-def _s3_client() -> Any:
-    return boto3.client(
-        "s3",
-        endpoint_url=AWS_ENDPOINT_URL,
-        region_name=AWS_REGION,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-    )
-
-
 def _list_objects(bucket: str, prefix: str) -> list[dict[str, Any]]:
-    s3 = _s3_client()
+    s3 = service_client("s3")
     objects: list[dict[str, Any]] = []
     continuation_token = None
     while True:
@@ -50,7 +39,7 @@ def _list_objects(bucket: str, prefix: str) -> list[dict[str, Any]]:
 
 
 def _load_jsonl(bucket: str, prefix: str) -> str:
-    s3 = _s3_client()
+    s3 = service_client("s3")
     objects = _list_objects(bucket, prefix)
     parts: list[str] = []
     for obj in objects:
