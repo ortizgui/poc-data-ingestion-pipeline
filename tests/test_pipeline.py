@@ -4,22 +4,28 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from analytics_writer import analytics_dimensions, sanitize_fragment
 from aws_local import (
     ANALYTICS_BUCKET,
     DATA_BUCKET,
     DOMAIN_REQUIRED_FIELDS,
     PipelineError,
     RejectedRowsThresholdError,
+    anomesdia_for,
     load_json,
     normalize_rejection_policy,
+    parse_business_date,
     partition_prefix,
     read_csv_text,
+    rejected_key_for,
+    rejection_record,
     rejection_threshold_exceeded,
     validate_mapping,
+    validate_product_config,
 )
-from evidence import Evidence, evidence_table
-from ecs_worker import process_message
-from enrichment_batch import run_enrichment
+from ecs_worker import process_message, product_from_file_key, run_id_from_file_key, s3_records
+from enrichment_batch import enrich_row, run_enrichment
+from evidence import Evidence, evidence_table, write_local_report
 from glue_catalog import (
     ANALYTICS_TABLES,
     BUSINESS_TABLES,
@@ -29,7 +35,9 @@ from glue_catalog import (
     BUSINESS_REJECTED_COLUMNS,
 )
 from glue_harmonization import run_harmonization
+from glue_landing import run_landing
 from local_sfn_runner import validate_event
+from pipeline import run_id_for
 
 
 class FakeTable:
@@ -435,6 +443,155 @@ class PipelineUnitTest(unittest.TestCase):
         rejected_columns = [name for name, _ in BUSINESS_REJECTED_COLUMNS]
         for col in ["run_id", "stage", "product", "reason", "row_number"]:
             self.assertIn(col, rejected_columns, f"{col} missing from business_rejected")
+
+
+    def test_parse_business_date_valid(self):
+        dt = parse_business_date("2026-05-01")
+        self.assertEqual(dt.year, 2026)
+        self.assertEqual(dt.month, 5)
+        self.assertEqual(dt.day, 1)
+
+    def test_parse_business_date_invalid_format_raises_error(self):
+        with self.assertRaises(PipelineError):
+            parse_business_date("01-05-2026")
+
+    def test_anomesdia_for_converts_date(self):
+        self.assertEqual(anomesdia_for("2026-05-01"), "20260501")
+
+    def test_normalize_rejection_policy_applies_defaults(self):
+        policy = normalize_rejection_policy("orders", {"domain": "transaction", "mapping_key": "x", "publish": {"destinations": ["billing"]}})
+        self.assertEqual(policy["max_error_percent"], 1.0)
+        self.assertEqual(policy["max_error_count"], 1000)
+        self.assertIn("data-quality-events", policy["destinations"])
+
+    def test_normalize_rejection_policy_accepts_max_values(self):
+        policy = normalize_rejection_policy("orders", {"domain": "transaction", "mapping_key": "x", "publish": {"destinations": ["billing"]}, "rejection_policy": {"max_error_percent": 100, "max_error_count": 999999, "destinations": ["ops"]}})
+        self.assertEqual(policy["max_error_percent"], 100.0)
+        self.assertEqual(policy["max_error_count"], 999999)
+
+    def test_normalize_rejection_policy_invalid_percent_raises_error(self):
+        with self.assertRaisesRegex(PipelineError, "must be between 0 and 100"):
+            normalize_rejection_policy("orders", {"domain": "transaction", "mapping_key": "x", "publish": {"destinations": ["billing"]}, "rejection_policy": {"max_error_percent": 101, "max_error_count": 10, "destinations": ["ops"]}})
+
+    def test_rejection_threshold_exceeded_zero_total(self):
+        policy = {"max_error_count": 100, "max_error_percent": 1.0}
+        self.assertTrue(rejection_threshold_exceeded(0, 1, policy))
+
+    def test_rejection_threshold_exceeded_boundary(self):
+        policy = {"max_error_count": 10, "max_error_percent": 50.0}
+        self.assertFalse(rejection_threshold_exceeded(10, 5, policy))
+        self.assertTrue(rejection_threshold_exceeded(10, 11, policy))
+
+    def test_validate_product_config_missing_mapping_key_raises_error(self):
+        with self.assertRaisesRegex(PipelineError, "missing mapping_key"):
+            validate_product_config("orders", {"domain": "transaction", "publish": {"destinations": ["billing"]}})
+
+    def test_validate_product_config_missing_destinations_raises_error(self):
+        with self.assertRaisesRegex(PipelineError, "missing publish destinations"):
+            validate_product_config("orders", {"domain": "transaction", "mapping_key": "x"})
+
+    def test_rejected_key_for_constructs_correct_path(self):
+        event = {"product": "orders", "business_date": "2026-05-01"}
+        path = rejected_key_for(event, "run-abc", "orders", "harmonization")
+        self.assertIn("rejected/harmonization/orders/", path)
+        self.assertIn("run-abc", path)
+        self.assertIn("orders.jsonl", path)
+
+    def test_rejection_record_has_expected_structure(self):
+        event = {"product": "orders", "business_date": "2026-05-01", "file_name": "orders.csv"}
+        record = rejection_record(event, "run-1", "harmonization", 5, "missing field", {"id": "123"})
+        self.assertEqual(record["run_id"], "run-1")
+        self.assertEqual(record["stage"], "harmonization")
+        self.assertEqual(record["product"], "orders")
+        self.assertEqual(record["row_number"], 5)
+        self.assertEqual(record["reason"], "missing field")
+        self.assertEqual(record["raw_row"], {"id": "123"})
+
+    def test_run_id_for_has_timestamp_and_hash(self):
+        result = run_id_for({"product": "orders", "file_name": "test.csv"})
+        self.assertRegex(result, r"^\d{14}-[a-f0-9]{8}$")
+
+    def test_product_from_file_key_curated_path(self):
+        self.assertEqual(product_from_file_key("curated/orders/.../file.parquet"), "orders")
+
+    def test_product_from_file_key_rejected_path(self):
+        self.assertEqual(product_from_file_key("rejected/harmonization/orders/.../file.jsonl"), "orders")
+
+    def test_product_from_file_key_invalid_raises_error(self):
+        with self.assertRaises(ValueError):
+            product_from_file_key("unknown/prefix/file.csv")
+
+    def test_run_id_from_file_key_curated_path(self):
+        rid = run_id_from_file_key("curated/orders/year=2026/month=05/day=01/run-123/orders.parquet")
+        self.assertEqual(rid, "run-123")
+
+    def test_run_id_from_file_key_rejected_path(self):
+        rid = run_id_from_file_key("rejected/harmonization/orders/year=2026/month=05/day=01/run-456/orders.jsonl")
+        self.assertEqual(rid, "run-456")
+
+    def test_s3_records_parses_s3_notification_event(self):
+        msg = {"Records": [{"s3": {"bucket": {"name": "data-lake"}, "object": {"key": "curated/orders/file.parquet"}}}]}
+        records = s3_records(msg)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["bucket"], "data-lake")
+        self.assertEqual(records[0]["key"], "curated/orders/file.parquet")
+
+    def test_s3_records_parses_direct_message(self):
+        records = s3_records({"bucket": "data-lake", "key": "curated/orders/file.parquet"})
+        self.assertEqual(len(records), 1)
+
+    def test_s3_records_test_event_returns_empty(self):
+        self.assertEqual(s3_records({"Event": "s3:TestEvent"}), [])
+
+    def test_sanitize_fragment_replaces_special_chars(self):
+        self.assertEqual(sanitize_fragment("hello world!"), "hello-world")
+
+    def test_sanitize_fragment_strips_leading_trailing_dashes(self):
+        self.assertEqual(sanitize_fragment("--hello--"), "hello")
+
+    def test_sanitize_fragment_empty_returns_item(self):
+        self.assertEqual(sanitize_fragment(""), "item")
+
+    def test_analytics_dimensions_uses_ingestion_id_from_context(self):
+        dims = analytics_dimensions({"ingestion_id": "ing-1", "business_date": "2026-05-01"})
+        self.assertEqual(dims["ingestion_id"], "ing-1")
+        self.assertEqual(dims["correlation_id"], "ing-1")
+
+    def test_analytics_dimensions_fallback_to_run_id(self):
+        dims = analytics_dimensions({"business_date": "2026-05-01"}, run_id="fallback-run")
+        self.assertEqual(dims.get("ingestion_id"), "fallback-run")
+
+    def test_evidence_status_fail_when_any_step_fails(self):
+        ev = Evidence("r1", "orders", "f.csv", "2026-05-01")
+        ev.ok("step1", "done")
+        ev.fail("step2", "error")
+        d = ev.as_dict()
+        self.assertEqual(d["status"], "FAIL")
+
+    def test_write_local_report_creates_file(self):
+        ev = Evidence("r1", "orders", "f.csv", "2026-05-01")
+        ev.ok("step1", "done")
+        path = write_local_report(ev.as_dict())
+        self.assertTrue(path.exists())
+        content = json.loads(path.read_text())
+        self.assertEqual(content["run_id"], "r1")
+        path.unlink()
+
+    def test_enrich_row_adds_domain_and_product(self):
+        row = {"transaction_id": "t1", "customer_id": "c1", "amount": "10.0", "transaction_date": "2026-05-01"}
+        event = {"product": "orders", "business_date": "2026-05-01"}
+        result = enrich_row(row, event)
+        self.assertEqual(result["domain"], "transaction")
+        self.assertEqual(result["product"], "orders")
+        self.assertEqual(result["business_date"], "2026-05-01")
+        self.assertIn("enriched_at", result)
+
+    def test_run_landing_missing_source_raises_error(self):
+        objects = {}
+        aws = SimpleNamespace(s3=FakeS3(objects))
+        event = {"product": "orders", "file_name": "missing.csv", "business_date": "2026-05-01"}
+        with self.assertRaises(Exception):
+            run_landing(event, aws, "run-1")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@
 - Publish sample events: `python3 pipeline.py`
 - Run local EventBridge and Step Functions flow: `python3 local_eventbridge_runner.py`
 - Run local downstream worker: `python3 ecs_worker.py`
-- Test: `python3 -m unittest discover -s tests`
+- Test: `. .venv/bin/activate && python3 -m unittest discover -s tests`
 - E2E: `python3 e2e_test.py`
 - Build: no build step detected
 
@@ -114,6 +114,7 @@ root/
 - Keep technical choices in decision files.
 - Keep code examples in pattern files.
 - Update Context Mesh after any change.
+- Run tests inside `.venv` after any code change to catch regressions.
 
 ### Never
 
@@ -133,6 +134,7 @@ root/
 - Add outcomes to decision files if an accepted approach produced new learnings.
 - Update `context/evolution/changelog.md`.
 - Create learning files only when a significant insight should be preserved.
+- **Run tests inside venv**: `. .venv/bin/activate && python3 -m unittest discover -s tests`. Fix all failures before marking done.
 
 ## Definition Of Done (Build Phase)
 
